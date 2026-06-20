@@ -31,3 +31,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# Private personal notes / roadmap (never published)
+NOTES.md
