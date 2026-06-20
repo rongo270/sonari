@@ -1,4 +1,4 @@
-# --- Whisper Transcriber .gitignore ---
+# --- Sonari .gitignore ---
 # The heavy stuff below is re-created by setup.bat / setup.sh on each machine,
 # so it must NOT be committed (keeps the repo small enough for GitHub/Drive).
 

@@ -57,7 +57,7 @@ def download_sample() -> None:
 def main() -> None:
     skip_turbo = "--skip-turbo" in sys.argv
     print("=" * 60)
-    print(" Downloading models for Whisper Transcriber")
+    print(" Downloading models for Sonari")
     print("=" * 60)
     if not skip_turbo:
         download_whisper("large-v3-turbo")  # recommended default model

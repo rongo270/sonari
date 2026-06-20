@@ -1,6 +1,6 @@
-# Whisper Transcriber — speech & lyrics to text
+# Sonari — speech & lyrics to text
 
-A strong, reliable audio-to-text system built on the best free models:
+**Sonari** is a strong, reliable audio-to-text system built on the best free models:
 
 - **Speech → text** with [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper)
   (`large-v3`), the state-of-the-art free speech model.
@@ -29,7 +29,7 @@ audio handling now, and (optionally) domain fine-tuning in the cloud later.
 
 ## Quick start
 
-Open a terminal in `C:\whisper-transcriber`.
+Open a terminal in the Sonari project folder.
 
 ### Transcribe speech
 ```bat
@@ -122,7 +122,7 @@ MUSIC:   song ── Demucs (vocals/no_vocals) ──► vocals.wav ── Whisp
 ## Project layout
 
 ```
-whisper-transcriber/
+sonari/
 ├─ setup.bat / setup.sh             one-click install (Windows / Mac+Linux)
 ├─ download_models.py               fetches all models
 ├─ transcribe.py  transcribe.bat  transcribe.sh    speech -> text

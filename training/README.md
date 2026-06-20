@@ -108,7 +108,7 @@ ct2-transformers-converter --model whisper-merged \
 Copy the `whisper-large-v3-mine/` folder to your laptop, then:
 
 ```bash
-python transcribe.py input/test.wav --model "C:/whisper-transcriber/whisper-large-v3-mine"
+python transcribe.py input/test.wav --model "./whisper-large-v3-mine"
 ```
 
 `--model` accepts a local folder path, so your custom model just works.

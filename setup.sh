@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-#  Whisper Transcriber - ONE-CLICK SETUP for macOS / Linux
+#  Sonari - ONE-CLICK SETUP for macOS / Linux
 #  Run on a new machine:   bash setup.sh
 #  (or rename to setup.command to double-click on macOS)
 #  Installs everything and downloads all the AI models.
@@ -9,7 +9,7 @@ set -e
 cd "$(dirname "$0")"
 
 echo "============================================================"
-echo "  Whisper Transcriber - macOS / Linux setup"
+echo "  Sonari - macOS / Linux setup"
 echo "============================================================"
 echo
 

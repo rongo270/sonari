@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  Whisper Transcriber - ONE-CLICK SETUP for WINDOWS
+REM  Sonari - ONE-CLICK SETUP for WINDOWS
 REM  Double-click this file on a new PC. It installs everything
 REM  and downloads all the AI models.
 REM ============================================================
@@ -8,7 +8,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================================
-echo   Whisper Transcriber - Windows setup
+echo   Sonari - Windows setup
 echo ============================================================
 echo.
 
