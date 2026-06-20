@@ -1,0 +1,18 @@
+# ---------------------------------------------------------------------------
+# Runtime (inference) dependencies — what you need to TRANSCRIBE on this laptop.
+# Install with:   venv/Scripts/python.exe -m pip install -r requirements.txt
+# ---------------------------------------------------------------------------
+
+# Speech-to-text engine. Uses CTranslate2 (not PyTorch) -> fast & light on CPU.
+faster-whisper>=1.0.3
+
+# Audio file reading/writing.
+soundfile>=0.12.1
+
+# Music vocal separation (Meta's Demucs). Pulls in torch + torchaudio
+# (CPU build on Windows). This is the big download (~250 MB).
+demucs>=4.0.1
+
+# Makes Python trust the Windows certificate store so HTTPS works through
+# AVG/Avast antivirus SSL inspection (downloads of models, pip, etc.).
+pip-system-certs

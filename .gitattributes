@@ -1,0 +1,8 @@
+# Normalize line endings across platforms.
+* text=auto
+
+# Shell scripts MUST use LF or they won't run on macOS/Linux.
+*.sh   text eol=lf
+
+# Windows batch files use CRLF.
+*.bat  text eol=crlf

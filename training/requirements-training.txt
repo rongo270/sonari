@@ -1,0 +1,14 @@
+# Install these ON THE CLOUD GPU (Colab/Kaggle/rented), NOT on the laptop.
+# torch with CUDA is preinstalled on Colab/Kaggle; on a rented box install the
+# CUDA build of torch first from https://pytorch.org .
+
+transformers>=4.44
+datasets>=2.20
+accelerate>=0.33
+peft>=0.12
+evaluate
+jiwer
+librosa
+soundfile
+tensorboard
+bitsandbytes      # 8-bit loading to fit large-v3 on a free T4
