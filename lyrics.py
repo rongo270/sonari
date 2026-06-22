@@ -139,6 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="copy the isolated vocals.wav next to the lyrics")
     ap.add_argument("--max-seconds", type=float, default=0,
                     help="only process the first N seconds (great for a quick test)")
+    ap.add_argument("--vad", action="store_true",
+                    help="enable silence skipping (VAD). OFF by default for songs: VAD tends "
+                         "to drop repeated chorus lines and mangle singing")
     ap.add_argument("--threads", type=int, default=0, help="CPU threads (0 = auto)")
     return ap
 
@@ -172,7 +175,8 @@ def main() -> None:
         vocals,
         language=args.language,
         beam_size=5,
-        vad=True,
+        # VAD is OFF by default for music (it drops repeated lines); --vad re-enables it.
+        vad=args.vad,
         word_timestamps=True,
         # Singing confuses the "use previous text as context" feature and makes
         # Whisper repeat lines, so we turn it off for music.
