@@ -38,6 +38,8 @@ Run it:
 from __future__ import annotations
 
 import html
+import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -53,9 +55,14 @@ INPUT_DIR = PROJECT_DIR / "input"
 OUTPUT_DIR = PROJECT_DIR / "output"
 # Small audio files the karaoke player streams from (see build_karaoke_html).
 KARAOKE_DIR = OUTPUT_DIR / "karaoke"
+# Where Demucs writes isolated vocals — used to rebuild a song's karaoke later.
+SEPARATED_DIR = PROJECT_DIR / "separated"
+# One tiny JSON "manifest" per finished job, so you can reopen it from the library.
+LIBRARY_DIR = OUTPUT_DIR / "library"
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 KARAOKE_DIR.mkdir(exist_ok=True)
+LIBRARY_DIR.mkdir(exist_ok=True)
 
 # Choices shown in the dropdowns ------------------------------------------------
 WHISPER_MODELS = ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"]
@@ -306,34 +313,39 @@ def _gradio_file_url(path) -> str:
     return "/gradio_api/file=" + quote(Path(path).resolve().as_posix(), safe="/")
 
 
-def build_karaoke_html(result, audio_path) -> str:
+def build_karaoke_html(seg_dicts, audio_source) -> str:
     """Build the karaoke widget: an <audio> player + timestamped, clickable lyrics.
 
-    Word-level <span>s carry their own start/end so the JS can light up each word
-    as it's sung. Returns "" if the audio couldn't be embedded.
+    `seg_dicts` is a list of plain dicts: {start, end, text, words:[{start,end,word}]}
+    — the same shape whether the song was just made or is being reopened from the
+    library. `audio_source` is any audio file (it gets encoded once to a small ogg
+    the browser can stream). Word-level <span>s carry their own start/end so the JS
+    can light up each word as it's sung. Returns "" if there's no audio to embed.
     """
-    audio_file = _karaoke_audio_file(audio_path)
+    if not audio_source:
+        return ""
+    audio_file = _karaoke_audio_file(audio_source)
     if not audio_file:
         return ""
     src = _gradio_file_url(audio_file)
 
     uid = str(int(time.time() * 1000))
     lines = []
-    for seg in result.segments:
-        s = max(seg.start or 0.0, 0.0)
-        e = max(seg.end or s, s)
-        words = getattr(seg, "words", None)
+    for seg in seg_dicts:
+        s = max(float(seg.get("start") or 0.0), 0.0)
+        e = max(float(seg.get("end") or s), s)
+        words = seg.get("words") or []
         if words:
             inner = "".join(
                 '<span class="kara-w" data-s="%.2f" data-e="%.2f">%s</span>' % (
-                    max(w.start if w.start is not None else s, 0.0),
-                    max(w.end if w.end is not None else (w.start or s), 0.0),
-                    html.escape(w.word),
+                    max(float(w["start"]) if w.get("start") is not None else s, 0.0),
+                    max(float(w["end"]) if w.get("end") is not None else (w.get("start") or s), 0.0),
+                    html.escape(w.get("word", "")),
                 )
                 for w in words
             )
         else:
-            inner = html.escape(seg.text.strip())
+            inner = html.escape((seg.get("text") or "").strip())
         lines.append('<div class="kara-line" data-s="%.2f" data-e="%.2f">%s</div>' % (s, e, inner))
 
     body = "\n".join(lines) or '<div class="kara-line">(no lyrics detected)</div>'
@@ -357,16 +369,177 @@ _KARA_EMPTY = (
 )
 
 
-# Installed once on page load. Adds ALL our custom styles (the progress bar and
-# the karaoke player) and wires up every karaoke widget — now and any that appear
-# later — because Gradio's HTML component doesn't run <script> tags, so we attach
-# behaviour from here via a MutationObserver.
-INIT_JS = r"""
-() => {
-  if (window.__sonariInit) return;
-  window.__sonariInit = true;
+# --------------------------------------------------------------------------- #
+# "My library": remember finished jobs so you can reopen them later
+# --------------------------------------------------------------------------- #
+# Every time a song or recording finishes we drop a tiny JSON "manifest" into
+# output/library/. It records the words + timestamps and WHERE the audio lives —
+# everything the karaoke player needs — so reopening a past song is instant (no
+# Demucs, no Whisper, no internet). The audio itself isn't copied; we just point
+# at it and let build_karaoke_html re-use the small cached .ogg.
+def _seg_dicts(result) -> list:
+    """Turn a TranscriptResult's segments into plain dicts (JSON-friendly)."""
+    out = []
+    for seg in result.segments:
+        words = [
+            {"start": w.start, "end": w.end, "word": w.word}
+            for w in (getattr(seg, "words", None) or [])
+        ]
+        out.append({"start": seg.start, "end": seg.end,
+                    "text": seg.text, "words": words})
+    return out
 
-  const css = `
+
+def _safe_slug(text: str) -> str:
+    """A short, filename-safe version of a title (keeps letters/numbers/_- )."""
+    slug = re.sub(r"[^\w\- ]+", "", str(text)).strip().replace(" ", "_")
+    return (slug or "item")[:60]
+
+
+def _save_to_library(kind, title, out_stem, audio_source, seg_dicts, text,
+                     files, language="") -> str | None:
+    """Write one manifest describing a finished job. Returns its id (or None)."""
+    try:
+        # If we'd previously auto-imported this same source as a "legacy" entry,
+        # drop it now so the library never shows the same song twice.
+        for p in LIBRARY_DIR.glob("legacy_*.json"):
+            try:
+                old = json.loads(p.read_text(encoding="utf-8"))
+                if old.get("kind") == kind and old.get("out_stem") == out_stem:
+                    p.unlink()
+            except Exception:
+                pass
+
+        ts = time.time()
+        item_id = f"{int(ts)}_{_safe_slug(title)}"
+        manifest = {
+            "id": item_id,
+            "kind": kind,                       # "song" or "speech"
+            "title": str(title),
+            "out_stem": out_stem,               # used to avoid duplicate entries
+            "created": ts,
+            "created_str": time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)),
+            "language": language or "",
+            "audio_source": str(audio_source) if audio_source else "",
+            "text": text or "",
+            "files": [str(f) for f in (files or [])],
+            "segments": seg_dicts,
+        }
+        (LIBRARY_DIR / f"{item_id}.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        return item_id
+    except Exception as exc:
+        print(f"[library] could not save this job ({exc}).")
+        return None
+
+
+def _load_manifest(item_id: str) -> dict:
+    """Read one saved manifest back from disk."""
+    return json.loads((LIBRARY_DIR / f"{item_id}.json").read_text(encoding="utf-8"))
+
+
+def _find_legacy_audio(stem: str, is_song: bool):
+    """Best-effort: locate the audio for a result made BEFORE the library existed.
+
+    Songs  -> the isolated vocals Demucs already wrote into separated/.
+    Speech -> the matching file still sitting in input/.
+    Returns a path or None (None just means 'no karaoke for this old item').
+    """
+    if is_song:
+        for vp in SEPARATED_DIR.glob(f"*/{stem}/vocals.wav"):
+            if vp.exists():
+                return vp
+    else:
+        for ip in INPUT_DIR.glob(f"{stem}.*"):
+            if ip.suffix.lower() != ".json":
+                return ip
+    return None
+
+
+def _import_legacy_outputs() -> None:
+    """Create manifests for results made before this feature, so they show up too.
+
+    Scans output/*.json (what the engine has always written) and, for anything
+    not already in the library, records a manifest — trying to point it at the
+    original vocals/input so its karaoke still works. Idempotent and defensive:
+    it never raises, so a stray file can't stop the app from starting.
+    """
+    try:
+        present = set()
+        for p in LIBRARY_DIR.glob("*.json"):
+            try:
+                m = json.loads(p.read_text(encoding="utf-8"))
+                present.add((m.get("kind"), m.get("out_stem")))
+            except Exception:
+                pass
+
+        for jp in sorted(OUTPUT_DIR.glob("*.json")):
+            name = jp.stem                         # "song.lyrics" or "recording"
+            is_song = name.endswith(".lyrics")
+            stem = name[:-len(".lyrics")] if is_song else name
+            kind = "song" if is_song else "speech"
+            if (kind, stem) in present:
+                continue
+            marker_id = "legacy_" + _safe_slug(name)
+            if (LIBRARY_DIR / f"{marker_id}.json").exists():
+                continue
+            try:
+                data = json.loads(jp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            seg_dicts = [
+                {"start": s.get("start") or 0.0, "end": s.get("end") or 0.0,
+                 "text": s.get("text") or "", "words": s.get("words") or []}
+                for s in (data.get("segments") or [])
+            ]
+            audio = _find_legacy_audio(stem, is_song)
+            files = sorted(
+                str(p) for p in OUTPUT_DIR.glob(f"{name}.*")
+                if p.suffix.lower() != ".ogg"
+            )
+            mtime = jp.stat().st_mtime
+            manifest = {
+                "id": marker_id, "kind": kind, "title": stem, "out_stem": stem,
+                "created": mtime,
+                "created_str": time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)),
+                "language": data.get("language", ""),
+                "audio_source": str(audio) if audio else "",
+                "text": data.get("text", ""),
+                "files": files, "segments": seg_dicts,
+            }
+            (LIBRARY_DIR / f"{marker_id}.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            present.add((kind, stem))
+    except Exception as exc:
+        print(f"[library] legacy import skipped ({exc}).")
+
+
+def _scan_library() -> list:
+    """Return [(label, id), ...] for the library dropdown, newest first."""
+    _import_legacy_outputs()  # cheap + idempotent: surface old results too
+    rows = []
+    for p in LIBRARY_DIR.glob("*.json"):
+        try:
+            m = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        icon = "🎵" if m.get("kind") == "song" else "🎙️"
+        label = f"{icon}  {m.get('title', '(untitled)')}    ·    {m.get('created_str', '')}"
+        rows.append((m.get("created", 0), label, m.get("id", p.stem)))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    return [(label, item_id) for _, label, item_id in rows]
+
+
+# --------------------------------------------------------------------------- #
+# All our custom CSS — ONE real stylesheet, handed to gr.Blocks(css=...)
+# --------------------------------------------------------------------------- #
+# IMPORTANT: this used to be injected from JavaScript, which was unreliable — when
+# it didn't run you got the dreaded "black text on a black box" karaoke. Giving
+# the CSS to Gradio directly guarantees it always loads. The karaoke colours are
+# deliberately high-contrast and self-contained (the player owns its own dark
+# background) so it looks the same and stays readable in any page theme.
+CUSTOM_CSS = """
 /* ---- center the page a little ---------------------------------------- */
 .gradio-container{max-width:1040px!important;margin:0 auto!important}
 
@@ -376,42 +549,53 @@ INIT_JS = r"""
 .pbar-label{font-size:17px;font-weight:650}
 .pbar-pct{font-size:14px;font-weight:700;opacity:.7;font-variant-numeric:tabular-nums}
 .pbar-track{height:16px;border-radius:999px;background:rgba(130,130,170,.22);overflow:hidden;position:relative}
-/* gentle moving stripes on the empty track, so even at 0% (e.g. while a model
-   loads) it still looks busy rather than frozen */
 .pbar-track::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(130,130,170,.16) 10px 20px);background-size:28px 28px;animation:pbar-stripe .9s linear infinite}
 @keyframes pbar-stripe{to{background-position:28px 0}}
 .pbar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#6d6df0,#9b6df0);width:0;transition:width .35s ease;position:relative;z-index:1;overflow:hidden}
-/* a soft sheen sweeping across the filled part */
 .pbar-fill::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:translateX(-100%);animation:pbar-sheen 1.15s linear infinite}
 @keyframes pbar-sheen{to{transform:translateX(100%)}}
 .pbar-sub{margin-top:13px;font-size:13px;opacity:.7;min-height:1.1em}
 
-/* ---- karaoke player -------------------------------------------------- */
-.kara-root{border:1px solid #34344c;border-radius:16px;padding:16px 18px;background:linear-gradient(180deg,#15151f,#0e0e16);color:#edecf6;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 10px 30px rgba(10,10,30,.25)}
-.kara-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
-.kara-title{font-size:13px;color:#a7a7c6}
-.kara-fs{cursor:pointer;border:0;border-radius:9px;padding:7px 13px;background:#5b5bd6;color:#fff;font-size:13px;font-weight:600}
-.kara-fs:hover{background:#6e6ef2}
+/* ---- karaoke player (self-contained dark theme, high contrast) ------- */
+.kara-root{--kara-up:#dadcff;--kara-sung:#71769c;border:1px solid #2c2c46;border-radius:18px;padding:18px 18px 20px;background:radial-gradient(120% 140% at 50% 0%,#1c1c30 0%,#11111d 55%,#0a0a12 100%);color:var(--kara-up);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 16px 44px rgba(8,8,24,.5)}
+.kara-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.kara-title{font-size:13px;color:#9aa0c8;font-weight:500}
+.kara-fs{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#5b5bd6;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
+.kara-fs:hover{background:#7474f2}
 .kara-audio{width:100%;margin-bottom:14px}
-.kara-lyrics{max-height:380px;overflow:auto;line-height:2.15;font-size:20px;scroll-behavior:smooth;padding:6px 4px}
-/* three states for a line: upcoming (default) · now singing (.on) · already sung (.sung) */
-.kara-line{padding:6px 12px;margin:2px 0;border-radius:11px;color:#b9b9d0;transition:color .2s,background .2s;cursor:pointer}
-.kara-line:hover{background:rgba(124,124,240,.12);color:#e2e1f2}
-.kara-line.on{background:rgba(124,124,240,.18);color:#ffffff}
-.kara-line.sung{color:#7a7a93}
-/* three states for a single word */
-.kara-w{border-radius:6px;padding:0 1px;transition:color .12s,background .12s}
-.kara-w.sung{color:#6f6f8c}
-.kara-w.on{background:linear-gradient(180deg,#ffdf72,#ffc83d);color:#1a1a26;font-weight:700;padding:1px 4px;box-shadow:0 1px 2px rgba(0,0,0,.25)}
-/* in the current line, words not yet reached stay bright white so you can read ahead */
-.kara-line.on .kara-w:not(.on):not(.sung){color:#ffffff}
-.kara-empty{padding:18px;border:1px dashed rgba(130,130,170,.4);border-radius:14px;opacity:.85;font-size:14px}
-.kara-root:fullscreen{padding:7vh 10vw;display:flex;flex-direction:column;justify-content:center;background:#08080f}
-.kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;font-size:34px;text-align:center;line-height:2.3}
-`;
-  const st = document.createElement('style');
-  st.textContent = css;
-  document.head.appendChild(st);
+/* the scrolling lyrics; soft fade at top & bottom so it glides */
+.kara-lyrics{max-height:430px;overflow:auto;scroll-behavior:smooth;padding:10px 6px;-webkit-mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent);mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent)}
+/* a line has three states: UPCOMING (default, clearly readable) ·
+   NOW SINGING (.on, big + bright + highlighted) · ALREADY SUNG (.sung, dim) */
+.kara-line{padding:7px 14px;margin:3px 0;border-radius:12px;font-size:20px;line-height:1.5;font-weight:600;color:var(--kara-up)!important;opacity:.9;cursor:pointer;transition:color .2s,background .2s,transform .2s,opacity .2s}
+.kara-line:hover{background:rgba(124,124,240,.14);opacity:1}
+.kara-line.sung{color:var(--kara-sung)!important;opacity:.55}
+.kara-line.on{color:#fff!important;font-size:23px;font-weight:750;opacity:1;background:linear-gradient(90deg,rgba(124,124,240,.30),rgba(124,124,240,.06));box-shadow:inset 3px 0 0 #8a8aff;transform:scale(1.012)}
+/* a single word: upcoming-in-current-line stays bright white so you can read
+   ahead; the word being sung gets the gold highlight; sung words dim */
+.kara-w{border-radius:7px;padding:0 2px;transition:color .12s,background .12s}
+.kara-line.on .kara-w:not(.on):not(.sung){color:#fff!important}
+.kara-w.sung{color:#7e82a8!important}
+.kara-w.on{background:linear-gradient(180deg,#ffe16b,#ffc23d);color:#1a1a26!important;font-weight:800;padding:2px 5px;box-shadow:0 2px 7px rgba(255,180,40,.4)}
+.kara-empty{padding:18px;border:1px dashed rgba(130,130,170,.4);border-radius:14px;opacity:.9;font-size:14px;color:#dadcff}
+/* fullscreen = a real karaoke screen */
+.kara-root:fullscreen{padding:6vh 8vw;display:flex;flex-direction:column;justify-content:center;background:radial-gradient(120% 120% at 50% 30%,#16162c,#06060d)}
+.kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;text-align:center}
+.kara-root:fullscreen .kara-line{font-size:30px}
+.kara-root:fullscreen .kara-line.on{font-size:42px}
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Karaoke behaviour (the moving highlight + click-to-jump + fullscreen).
+# The CSS lives in CUSTOM_CSS above; this only WIRES players up, because
+# Gradio's HTML component won't run <script>. We attach behaviour on page load
+# and a MutationObserver catches any players that appear later.
+# --------------------------------------------------------------------------- #
+INIT_JS = r"""
+() => {
+  if (window.__sonariInit) return;
+  window.__sonariInit = true;
 
   function wire(root) {
     if (root.dataset.wired === '1') return;
@@ -477,7 +661,7 @@ INIT_JS = r"""
 #                    (songs also add "vocals": <path>)
 # --------------------------------------------------------------------------- #
 def _process_speech(audio_path, model_name, language, task, beam_size,
-                    vad, word_ts, prompt, threads):
+                    vad, word_ts, prompt, threads, title=None):
     """Engine generator for plain speech."""
     # Loading the model can download a few GB the first time — stream a live
     # elapsed counter through it so the bar never looks stuck.
@@ -510,7 +694,11 @@ def _process_speech(audio_path, model_name, language, task, beam_size,
     result = core._build_result(info, segments, time.time() - t0)
     written = core.write_all(result, OUTPUT_DIR, Path(audio_path).stem,
                              ("txt", "srt", "vtt", "json"))
-    kara = build_karaoke_html(result, audio_path)
+    seg_dicts = _seg_dicts(result)
+    kara = build_karaoke_html(seg_dicts, audio_path)
+    _save_to_library("speech", title or Path(audio_path).stem, Path(audio_path).stem,
+                     audio_path, seg_dicts, result.text, written,
+                     info.language if info else "")
     yield {"done": True,
            "text": result.text,
            "rows": [_row(s) for s in segments],
@@ -520,7 +708,7 @@ def _process_speech(audio_path, model_name, language, task, beam_size,
 
 
 def _process_lyrics(audio_path, whisper_model, demucs_model, language,
-                    max_seconds, vad, threads):
+                    max_seconds, vad, threads, title=None):
     """Engine generator for songs: separate the vocals, then read the lyrics."""
     # Estimate how long separation will take so the bar can keep moving during it.
     try:
@@ -588,7 +776,11 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
     result = core._build_result(info, segments, time.time() - t1)
     written = core.write_all(result, OUTPUT_DIR, f"{Path(audio_path).stem}.lyrics",
                              ("txt", "srt", "json"))
-    kara = build_karaoke_html(result, vocals)
+    seg_dicts = _seg_dicts(result)
+    kara = build_karaoke_html(seg_dicts, vocals)
+    _save_to_library("song", title or Path(audio_path).stem, Path(audio_path).stem,
+                     vocals, seg_dicts, result.text, written,
+                     info.language if info else "")
     yield {"done": True,
            "text": result.text,
            "rows": [_row(s) for s in segments],
@@ -837,12 +1029,13 @@ def build_ui() -> gr.Blocks:
 
                 if mode.startswith("Song"):
                     gen = _process_lyrics(str(audio), model_name, demucs_model, language,
-                                          max_seconds, vad, threads)
+                                          max_seconds, vad, threads, title=title)
                     yield from _pump(gen, progress=yt_progress, results=yt_results, pbar=yt_pbar,
                                      summary=yt_summary, text=yt_text, segs=yt_segs, files=yt_files,
                                      kara=yt_kara, vocals=yt_vocals)
                 else:
-                    gen = _process_speech(str(audio), model_name, language, task, 5, vad, True, None, threads)
+                    gen = _process_speech(str(audio), model_name, language, task, 5, vad, True, None,
+                                          threads, title=title)
                     yield from _pump(gen, progress=yt_progress, results=yt_results, pbar=yt_pbar,
                                      summary=yt_summary, text=yt_text, segs=yt_segs, files=yt_files, kara=yt_kara)
 
@@ -855,6 +1048,58 @@ def build_ui() -> gr.Blocks:
             )
             yt_back.click(_go_setup, outputs=[yt_setup, yt_progress, yt_results])
 
+        # ================= TAB 4: My library =========================== #
+        with gr.Tab("📂 My library") as lib_tab:
+            gr.Markdown(
+                "### 📂 Open something you already made\n"
+                "Every song and recording you finish is saved here automatically. "
+                "Pick one and press **Open** to bring its **karaoke player** back "
+                "instantly — no waiting, no internet."
+            )
+            with gr.Row():
+                lib_pick = gr.Dropdown(choices=_scan_library(), value=None, scale=5,
+                                       label="Your saved items (newest first)")
+                lib_refresh = gr.Button("⟳ Refresh", scale=1)
+            lib_open = gr.Button("Open  ▶", variant="primary", size="lg")
+            gr.Markdown("_Empty? Make a song or a transcript in the other tabs first — it "
+                        "shows up here the moment it's done (press Refresh if you don't see it)._")
+
+            # ---- the reopened result (hidden until you press Open) ----
+            with gr.Column(visible=False) as lib_results:
+                lib_title = gr.Markdown()
+                with gr.Accordion("🎤 Karaoke player", open=True):
+                    lib_kara = gr.HTML()
+                lib_text = gr.Textbox(label="Text", lines=10)
+                with gr.Accordion("Lines & downloads", open=False):
+                    lib_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
+                                            label="Lines (with timestamps)")
+                    lib_files = gr.File(label="Download", file_count="multiple")
+
+            def _refresh_library():
+                """Re-scan the library folder and repopulate the dropdown."""
+                return gr.update(choices=_scan_library())
+
+            def _open_library(item_id):
+                """Rebuild a saved job's karaoke + transcript from its manifest."""
+                if not item_id:
+                    raise gr.Error("Pick a saved item from the list first.")
+                m = _load_manifest(item_id)
+                seg_dicts = m.get("segments") or []
+                kara = build_karaoke_html(seg_dicts, m.get("audio_source")) or _KARA_EMPTY
+                rows = [[core._ts(s.get("start") or 0.0), core._ts(s.get("end") or 0.0),
+                         (s.get("text") or "").strip()] for s in seg_dicts]
+                files = [f for f in (m.get("files") or []) if Path(f).exists()]
+                icon = "🎵" if m.get("kind") == "song" else "🎙️"
+                title_md = f"### {icon} {m.get('title', '(untitled)')}\n*saved {m.get('created_str', '')}*"
+                return {lib_results: gr.update(visible=True),
+                        lib_title: title_md, lib_kara: kara, lib_text: m.get("text", ""),
+                        lib_segs: rows, lib_files: files}
+
+            lib_refresh.click(_refresh_library, outputs=[lib_pick])
+            lib_tab.select(_refresh_library, outputs=[lib_pick])  # auto-refresh on open
+            lib_open.click(_open_library, inputs=[lib_pick],
+                           outputs=[lib_results, lib_title, lib_kara, lib_text, lib_segs, lib_files])
+
         gr.Markdown("---\nResults are also saved to the **output/** folder. "
                     "Everything runs locally; the only step that needs internet is "
                     "downloading a link or a model you haven't used before.")
@@ -866,9 +1111,12 @@ def build_ui() -> gr.Blocks:
 def main() -> None:
     demo = build_ui()
     demo.queue()  # required for live streaming + progress bars
+    # NOTE: in Gradio 6 both `theme` and `css` live on launch(), NOT on Blocks().
+    # Passing our stylesheet here is the reliable fix for the old "black on black"
+    # karaoke (the previous JS-injected CSS didn't always run).
     # allowed_paths lets the browser stream the karaoke audio files we write to
     # output/ (see _gradio_file_url); without it Gradio blocks serving them.
-    demo.launch(theme=gr.themes.Soft(), inbrowser=True, show_error=True,
+    demo.launch(theme=gr.themes.Soft(), css=CUSTOM_CSS, inbrowser=True, show_error=True,
                 allowed_paths=[str(OUTPUT_DIR)])
 
 
