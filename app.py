@@ -537,8 +537,8 @@ def _scan_library() -> list:
 # IMPORTANT: this used to be injected from JavaScript, which was unreliable — when
 # it didn't run you got the dreaded "black text on a black box" karaoke. Giving
 # the CSS to Gradio directly guarantees it always loads. The karaoke colours are
-# deliberately high-contrast and self-contained (the player owns its own dark
-# background) so it looks the same and stays readable in any page theme.
+# deliberately high-contrast and self-contained (the player owns its own bright
+# yellow background) so it looks the same and stays readable in any page theme.
 CUSTOM_CSS = """
 /* ---- center the page a little ---------------------------------------- */
 .gradio-container{max-width:1040px!important;margin:0 auto!important}
@@ -556,30 +556,36 @@ CUSTOM_CSS = """
 @keyframes pbar-sheen{to{transform:translateX(100%)}}
 .pbar-sub{margin-top:13px;font-size:13px;opacity:.7;min-height:1.1em}
 
-/* ---- karaoke player (self-contained dark theme, high contrast) ------- */
-.kara-root{--kara-up:#dadcff;--kara-sung:#71769c;border:1px solid #2c2c46;border-radius:18px;padding:18px 18px 20px;background:radial-gradient(120% 140% at 50% 0%,#1c1c30 0%,#11111d 55%,#0a0a12 100%);color:var(--kara-up);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 16px 44px rgba(8,8,24,.5)}
+/* ---- karaoke player (self-contained sunny YELLOW theme, high contrast) - */
+/* Light gold background + DARK text so the lyrics are easy to read.
+   WANT A GREEN SCREEN INSTEAD? Swap the two `background:` gradients below for
+   green ones, e.g.
+     .kara-root           -> radial-gradient(120% 140% at 50% 0%,#eaffd1 0%,#b6f06a 55%,#8fe03d 100%)
+     .kara-root:fullscreen-> radial-gradient(120% 120% at 50% 30%,#dcffb0,#8fe03d)
+   The dark text already reads fine on green too, so nothing else needs to change. */
+.kara-root{--kara-up:#241a00;--kara-sung:#9b8b48;border:1px solid #e6c34a;border-radius:18px;padding:18px 18px 20px;background:radial-gradient(120% 140% at 50% 0%,#fff7c4 0%,#ffe874 55%,#ffd23f 100%);color:var(--kara-up);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 16px 44px rgba(150,115,15,.35)}
 .kara-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
-.kara-title{font-size:13px;color:#9aa0c8;font-weight:500}
-.kara-fs{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#5b5bd6;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
-.kara-fs:hover{background:#7474f2}
+.kara-title{font-size:13px;color:#7a6a2a;font-weight:600}
+.kara-fs{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#8a5a00;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
+.kara-fs:hover{background:#a86d00}
 .kara-audio{width:100%;margin-bottom:14px}
 /* the scrolling lyrics; soft fade at top & bottom so it glides */
 .kara-lyrics{max-height:430px;overflow:auto;scroll-behavior:smooth;padding:10px 6px;-webkit-mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent);mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent)}
 /* a line has three states: UPCOMING (default, clearly readable) ·
    NOW SINGING (.on, big + bright + highlighted) · ALREADY SUNG (.sung, dim) */
 .kara-line{padding:7px 14px;margin:3px 0;border-radius:12px;font-size:20px;line-height:1.5;font-weight:600;color:var(--kara-up)!important;opacity:.9;cursor:pointer;transition:color .2s,background .2s,transform .2s,opacity .2s}
-.kara-line:hover{background:rgba(124,124,240,.14);opacity:1}
-.kara-line.sung{color:var(--kara-sung)!important;opacity:.55}
-.kara-line.on{color:#fff!important;font-size:23px;font-weight:750;opacity:1;background:linear-gradient(90deg,rgba(124,124,240,.30),rgba(124,124,240,.06));box-shadow:inset 3px 0 0 #8a8aff;transform:scale(1.012)}
-/* a single word: upcoming-in-current-line stays bright white so you can read
-   ahead; the word being sung gets the gold highlight; sung words dim */
+.kara-line:hover{background:rgba(120,80,0,.12);opacity:1}
+.kara-line.sung{color:var(--kara-sung)!important;opacity:.6}
+.kara-line.on{color:#1a1300!important;font-size:23px;font-weight:750;opacity:1;background:linear-gradient(90deg,rgba(255,255,255,.6),rgba(255,255,255,.1));box-shadow:inset 3px 0 0 #c47d00,0 2px 10px rgba(150,100,0,.2);transform:scale(1.012)}
+/* a single word: upcoming-in-current-line stays darkest so you can read
+   ahead; the word being sung gets a hot orange highlight; sung words dim */
 .kara-w{border-radius:7px;padding:0 2px;transition:color .12s,background .12s}
-.kara-line.on .kara-w:not(.on):not(.sung){color:#fff!important}
-.kara-w.sung{color:#7e82a8!important}
-.kara-w.on{background:linear-gradient(180deg,#ffe16b,#ffc23d);color:#1a1a26!important;font-weight:800;padding:2px 5px;box-shadow:0 2px 7px rgba(255,180,40,.4)}
-.kara-empty{padding:18px;border:1px dashed rgba(130,130,170,.4);border-radius:14px;opacity:.9;font-size:14px;color:#dadcff}
+.kara-line.on .kara-w:not(.on):not(.sung){color:#1a1300!important}
+.kara-w.sung{color:#a89860!important}
+.kara-w.on{background:linear-gradient(180deg,#ff8a1e,#e23b00);color:#fff!important;font-weight:800;padding:2px 5px;box-shadow:0 2px 8px rgba(200,60,0,.45)}
+.kara-empty{padding:18px;border:1px dashed rgba(150,110,20,.5);border-radius:14px;opacity:.9;font-size:14px;color:#3a2f00}
 /* fullscreen = a real karaoke screen */
-.kara-root:fullscreen{padding:6vh 8vw;display:flex;flex-direction:column;justify-content:center;background:radial-gradient(120% 120% at 50% 30%,#16162c,#06060d)}
+.kara-root:fullscreen{padding:6vh 8vw;display:flex;flex-direction:column;justify-content:center;background:radial-gradient(120% 120% at 50% 30%,#fff2a8,#ffce3a)}
 .kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;text-align:center}
 .kara-root:fullscreen .kara-line{font-size:30px}
 .kara-root:fullscreen .kara-line.on{font-size:42px}
