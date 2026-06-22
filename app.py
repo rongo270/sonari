@@ -7,13 +7,22 @@ A friendly browser interface for everything the command-line tools do, plus an
 "online" tab that takes a YouTube (or other) link. It opens in your browser and
 runs 100% on your own computer.
 
-Three tabs:
+Three tabs, and every tab works the same way — like a little 2-step wizard:
+
+    SCREEN 1 (setup)    pick your file / link and the options, press the button
+            │
+            ▼
+    SCREEN 2 (work)     ONE clean progress bar fills up while it works …
+                        … and only when it's finished do the lyrics + the
+                        karaoke player appear.
+
+The three tabs:
   1. Speech -> text     (upload a file or record from your mic)
   2. Song  -> lyrics    (Demucs separates the vocals, then Whisper reads them)
   3. From a link        (paste a YouTube URL -> audio -> lyrics or transcript)
 
 Highlights:
-  - Live progress on screen (including the slow vocal-separation step).
+  - A single, smooth progress bar (no more flickering / "page refreshing").
   - A built-in KARAOKE player: press play and the words light up in time with
     the audio, click any line to jump, and go fullscreen.
   - VAD (silence skipping) defaults OFF for songs, because it tends to drop
@@ -66,6 +75,58 @@ def _get_model(model_name: str, threads):
     return _MODEL_CACHE[key]
 
 
+def _is_model_downloaded(model_name: str) -> bool:
+    """True if this model's weights are already on disk (so loading is quick).
+
+    Used only to pick a 'Downloading…' vs 'Loading…' message. faster-whisper
+    stores models as models--<org>--faster-whisper-<name>; the org differs per
+    model, so we match on the trailing name and confirm the weights (model.bin)
+    actually finished downloading.
+    """
+    try:
+        for d in core.MODELS_DIR.glob(f"models--*--faster-whisper-{model_name}"):
+            if any(d.glob("snapshots/*/model.bin")):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _load_model_streaming(model_name, threads, *, pct):
+    """Load a model on a side-thread, yielding a live 'still working' tick every
+    half-second so the progress bar never *looks* frozen during a slow first-time
+    download (the full large-v3 is a ~3 GB download). The elapsed-seconds counter
+    going up is the proof that it's working, not stuck.
+
+    Returns (model, device, compute_type) — capture it with `yield from`.
+    """
+    downloading = not _is_model_downloaded(model_name)
+    label = (f"Downloading the “{model_name}” model…" if downloading
+             else f"Loading the “{model_name}” model…")
+    note = ("first time only — this can be a big download (large-v3 ≈ 3 GB); "
+            "please keep this window open" if downloading
+            else "reading it from your disk…")
+
+    holder: dict = {}
+
+    def _work():
+        try:
+            holder["m"] = _get_model(model_name, threads)
+        except Exception as exc:
+            holder["e"] = exc
+
+    th = threading.Thread(target=_work, daemon=True)
+    th.start()
+    t0 = time.time()
+    while th.is_alive():
+        el = int(time.time() - t0)
+        yield {"percent": pct, "label": label, "sub": f"{el}s — {note}"}
+        th.join(timeout=0.5)
+    if "e" in holder:
+        raise gr.Error(f"Could not load the model “{model_name}”: {holder['e']}")
+    return holder["m"]
+
+
 def _norm_lang(language):
     """Turn the dropdown value into what the engine expects (None = auto-detect)."""
     if not language or str(language).lower() in ("auto", "auto-detect"):
@@ -75,6 +136,27 @@ def _norm_lang(language):
 
 def _row(seg):
     return [core._ts(seg.start), core._ts(seg.end), seg.text.strip()]
+
+
+# --------------------------------------------------------------------------- #
+# The single progress bar
+# --------------------------------------------------------------------------- #
+# Instead of Gradio's built-in progress meter (which flickered and looked like
+# the page was constantly refreshing), we draw our OWN little bar as plain HTML
+# and update just this one thing while work is happening. `percent` is 0..1.
+def progress_html(percent: float, label: str, sub: str = "") -> str:
+    """Return the HTML for one progress bar: a title, a % and a filling track."""
+    pct = max(0, min(100, int(round(float(percent) * 100))))
+    return (
+        '<div class="pbar-card">'
+        '<div class="pbar-head">'
+        f'<span class="pbar-label">{html.escape(str(label))}</span>'
+        f'<span class="pbar-pct">{pct}%</span>'
+        '</div>'
+        f'<div class="pbar-track"><div class="pbar-fill" style="width:{pct}%"></div></div>'
+        f'<div class="pbar-sub">{html.escape(str(sub))}</div>'
+        '</div>'
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -143,7 +225,7 @@ def build_karaoke_html(result, audio_path) -> str:
     return (
         '<div class="kara-root" id="kara-%s" data-wired="0">'
         '<div class="kara-bar">'
-        '<span class="kara-title">🎤 Press play — words light up in time · click a line to jump</span>'
+        '<span class="kara-title">🎤 Press play — the current word lights up · click any line to jump</span>'
         '<button class="kara-fs" type="button">⛶ Fullscreen</button>'
         '</div>'
         '<audio class="kara-audio" controls preload="metadata" src="%s"></audio>'
@@ -152,27 +234,65 @@ def build_karaoke_html(result, audio_path) -> str:
     ) % (uid, uri, body)
 
 
-# Installed once on page load. Adds the styles and wires up every karaoke widget
-# (now and any that appear later) — Gradio's HTML component doesn't run <script>
-# tags, so we attach behaviour from here via a MutationObserver.
-KARA_JS = r"""
+# Shown in the results area if the audio couldn't be embedded for the player.
+_KARA_EMPTY = (
+    '<div class="kara-empty">🎤 The karaoke player isn’t available for this file '
+    '(its audio couldn’t be embedded), but your transcript and downloads are right '
+    'below.</div>'
+)
+
+
+# Installed once on page load. Adds ALL our custom styles (the progress bar and
+# the karaoke player) and wires up every karaoke widget — now and any that appear
+# later — because Gradio's HTML component doesn't run <script> tags, so we attach
+# behaviour from here via a MutationObserver.
+INIT_JS = r"""
 () => {
-  if (window.__karaInit) return;
-  window.__karaInit = true;
+  if (window.__sonariInit) return;
+  window.__sonariInit = true;
+
   const css = `
-.kara-root{border:1px solid #2a2a3a;border-radius:12px;padding:14px;background:#0c0c12;color:#ececf5;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
-.kara-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
-.kara-title{font-size:13px;opacity:.75}
-.kara-fs{cursor:pointer;border:0;border-radius:8px;padding:6px 12px;background:#5b5bd6;color:#fff;font-size:13px;font-weight:600}
-.kara-fs:hover{background:#6d6df0}
-.kara-audio{width:100%;margin-bottom:12px}
-.kara-lyrics{max-height:340px;overflow:auto;line-height:2;font-size:18px;scroll-behavior:smooth;padding:4px}
-.kara-line{padding:5px 8px;border-radius:8px;opacity:.5;transition:opacity .15s,background .15s;cursor:pointer}
-.kara-line:hover{opacity:.85}
-.kara-line.on{opacity:1;background:rgba(91,91,214,.22)}
-.kara-w.on{background:#ffd64a;color:#10101a;border-radius:5px}
-.kara-root:fullscreen{padding:6vh 10vw;display:flex;flex-direction:column;justify-content:center;background:#08080d}
-.kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;font-size:32px;text-align:center;line-height:2.2}
+/* ---- center the page a little ---------------------------------------- */
+.gradio-container{max-width:1040px!important;margin:0 auto!important}
+
+/* ---- the single progress bar ----------------------------------------- */
+.pbar-card{border:1px solid rgba(130,130,170,.28);border-radius:16px;padding:22px 24px;background:rgba(130,130,170,.06)}
+.pbar-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:14px}
+.pbar-label{font-size:17px;font-weight:650}
+.pbar-pct{font-size:14px;font-weight:700;opacity:.7;font-variant-numeric:tabular-nums}
+.pbar-track{height:16px;border-radius:999px;background:rgba(130,130,170,.22);overflow:hidden;position:relative}
+/* gentle moving stripes on the empty track, so even at 0% (e.g. while a model
+   loads) it still looks busy rather than frozen */
+.pbar-track::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(130,130,170,.16) 10px 20px);background-size:28px 28px;animation:pbar-stripe .9s linear infinite}
+@keyframes pbar-stripe{to{background-position:28px 0}}
+.pbar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#6d6df0,#9b6df0);width:0;transition:width .35s ease;position:relative;z-index:1;overflow:hidden}
+/* a soft sheen sweeping across the filled part */
+.pbar-fill::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:translateX(-100%);animation:pbar-sheen 1.15s linear infinite}
+@keyframes pbar-sheen{to{transform:translateX(100%)}}
+.pbar-sub{margin-top:13px;font-size:13px;opacity:.7;min-height:1.1em}
+
+/* ---- karaoke player -------------------------------------------------- */
+.kara-root{border:1px solid #34344c;border-radius:16px;padding:16px 18px;background:linear-gradient(180deg,#15151f,#0e0e16);color:#edecf6;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 10px 30px rgba(10,10,30,.25)}
+.kara-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+.kara-title{font-size:13px;color:#a7a7c6}
+.kara-fs{cursor:pointer;border:0;border-radius:9px;padding:7px 13px;background:#5b5bd6;color:#fff;font-size:13px;font-weight:600}
+.kara-fs:hover{background:#6e6ef2}
+.kara-audio{width:100%;margin-bottom:14px}
+.kara-lyrics{max-height:380px;overflow:auto;line-height:2.15;font-size:20px;scroll-behavior:smooth;padding:6px 4px}
+/* three states for a line: upcoming (default) · now singing (.on) · already sung (.sung) */
+.kara-line{padding:6px 12px;margin:2px 0;border-radius:11px;color:#b9b9d0;transition:color .2s,background .2s;cursor:pointer}
+.kara-line:hover{background:rgba(124,124,240,.12);color:#e2e1f2}
+.kara-line.on{background:rgba(124,124,240,.18);color:#ffffff}
+.kara-line.sung{color:#7a7a93}
+/* three states for a single word */
+.kara-w{border-radius:6px;padding:0 1px;transition:color .12s,background .12s}
+.kara-w.sung{color:#6f6f8c}
+.kara-w.on{background:linear-gradient(180deg,#ffdf72,#ffc83d);color:#1a1a26;font-weight:700;padding:1px 4px;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+/* in the current line, words not yet reached stay bright white so you can read ahead */
+.kara-line.on .kara-w:not(.on):not(.sung){color:#ffffff}
+.kara-empty{padding:18px;border:1px dashed rgba(130,130,170,.4);border-radius:14px;opacity:.85;font-size:14px}
+.kara-root:fullscreen{padding:7vh 10vw;display:flex;flex-direction:column;justify-content:center;background:#08080f}
+.kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;font-size:34px;text-align:center;line-height:2.3}
 `;
   const st = document.createElement('style');
   st.textContent = css;
@@ -191,11 +311,15 @@ KARA_JS = r"""
         let cur = null;
         for (const l of lines) {
           const s = +l.dataset.s, e = +l.dataset.e;
-          if (t >= s && t < e) { l.classList.add('on'); cur = l; } else { l.classList.remove('on'); }
+          const on = (t >= s && t < e);
+          l.classList.toggle('on', on);
+          l.classList.toggle('sung', t >= e);   // already finished -> dim
+          if (on) cur = l;
         }
         for (const w of words) {
           const s = +w.dataset.s, e = +w.dataset.e;
-          if (t >= s && t < e) { w.classList.add('on'); } else { w.classList.remove('on'); }
+          w.classList.toggle('on', t >= s && t < e);   // singing now -> highlight
+          w.classList.toggle('sung', t >= e);          // already sung -> dim
         }
         if (cur && box) {
           const top = cur.offsetTop - box.clientHeight / 2 + cur.clientHeight / 2;
@@ -227,17 +351,27 @@ KARA_JS = r"""
 
 
 # --------------------------------------------------------------------------- #
-# Core processing (generators -> live updates in the UI)
+# The "engine" generators
+# --------------------------------------------------------------------------- #
+# These do the real work and report progress by yielding tiny dictionaries
+# ("events"). They know NOTHING about Gradio or which boxes things go in — that
+# keeps them simple. The UI layer (_pump, below) decides where each value lands.
+#
+#   while working:   {"percent": 0..1, "label": "...", "sub": "..."}
+#   right at the end:{"done": True, "text", "rows", "files", "kara", "summary"}
+#                    (songs also add "vocals": <path>)
 # --------------------------------------------------------------------------- #
 def _process_speech(audio_path, model_name, language, task, beam_size,
-                    vad, word_ts, prompt, threads, progress):
-    """Yields (status, text, rows, files, karaoke_html) as the transcript streams."""
-    progress(0.0, desc=f"Loading model '{model_name}'…")
-    model, device, _ = _get_model(model_name, threads)
+                    vad, word_ts, prompt, threads):
+    """Engine generator for plain speech."""
+    # Loading the model can download a few GB the first time — stream a live
+    # elapsed counter through it so the bar never looks stuck.
+    model, device, _ = yield from _load_model_streaming(model_name, threads, pct=0.02)
 
-    status, text, rows, segments, info = "Starting…", "", [], [], None
+    segments, info = [], None
     t0 = time.time()
-    progress(0.05, desc="Listening…")
+    yield {"percent": 0.05, "label": "Listening to the audio…", "sub": ""}
+
     for kind, payload in core.transcribe_stream(
         model, audio_path,
         language=_norm_lang(language), task=task, beam_size=int(beam_size),
@@ -245,31 +379,35 @@ def _process_speech(audio_path, model_name, language, task, beam_size,
     ):
         if kind == "info":
             info = payload
-            status = (f"🌍 {info.language} ({info.language_probability:.0%}) · "
-                      f"{info.duration:.0f}s audio · running on {device}")
-            yield status, text, rows, None, ""
+            yield {"percent": 0.08, "label": "Transcribing…",
+                   "sub": f"{info.language} · {info.duration:.0f}s of audio · running on {device}"}
         else:
             seg = payload
             segments.append(seg)
-            text += seg.text
-            rows = rows + [_row(seg)]
             if info and info.duration:
-                progress(min(seg.end / info.duration, 0.99), desc="Transcribing…")
-            yield status, text.strip(), rows, None, ""
+                frac = min(seg.end / info.duration, 1.0)
+                sub = f"{core._ts(seg.end)} / {core._ts(info.duration)}"
+            else:
+                frac, sub = 0.5, ""
+            # transcription occupies 8% -> 98% of the bar
+            yield {"percent": 0.08 + 0.90 * frac, "label": "Transcribing…", "sub": sub}
 
     result = core._build_result(info, segments, time.time() - t0)
     written = core.write_all(result, OUTPUT_DIR, Path(audio_path).stem,
                              ("txt", "srt", "vtt", "json"))
-    progress(1.0, desc="Building player…")
     kara = build_karaoke_html(result, audio_path)
-    yield (f"✅ Done · {info.language} · {len(segments)} segments · {result.elapsed:.0f}s",
-           result.text, rows, [str(p) for p in written], kara)
+    yield {"done": True,
+           "text": result.text,
+           "rows": [_row(s) for s in segments],
+           "files": [str(p) for p in written],
+           "kara": kara,
+           "summary": f"### ✅ Done\n{info.language} · {len(segments)} segments · {result.elapsed:.0f}s"}
 
 
 def _process_lyrics(audio_path, whisper_model, demucs_model, language,
-                    max_seconds, vad, threads, progress):
-    """Yields (status, text, rows, files, vocals_path, karaoke_html) for music."""
-    # Estimate the separation time so the progress bar can move while it runs.
+                    max_seconds, vad, threads):
+    """Engine generator for songs: separate the vocals, then read the lyrics."""
+    # Estimate how long separation will take so the bar can keep moving during it.
     try:
         import soundfile as sf
         total = sf.info(str(audio_path)).duration
@@ -279,8 +417,8 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
         total = min(total, float(max_seconds))
     est = max(15.0, (total or 30.0) * 4.0)
 
-    # Demucs is one long blocking call with no yield points, so run it in a
-    # thread and stream an elapsed-time counter to the screen meanwhile.
+    # Demucs is one long blocking call with no progress callback, so we run it on
+    # a side thread and show a live elapsed-seconds counter while it works.
     holder: dict = {}
 
     def _work():
@@ -292,21 +430,24 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
     th = threading.Thread(target=_work, daemon=True)
     th.start()
     t0 = time.time()
+    yield {"percent": 0.02, "label": "Separating the vocals from the music…",
+           "sub": "This is the slow step on a CPU — please wait."}
     while th.is_alive():
         el = time.time() - t0
-        progress(0.02 + 0.5 * min(el / est, 0.95), desc=f"Separating vocals… {int(el)}s")
-        yield (f"🎛️ Separating vocals from the music… **{int(el)}s** elapsed "
-               f"(this is the slow part on CPU — please wait)", "", [], None, None, "")
+        # separation occupies 2% -> ~52% of the bar (time-estimate based)
+        yield {"percent": 0.02 + 0.50 * min(el / est, 0.95),
+               "label": "Separating the vocals from the music…",
+               "sub": f"{int(el)}s elapsed — the slow step on a CPU, please wait."}
         th.join(timeout=0.8)
     if "e" in holder:
         raise gr.Error(f"Vocal separation failed: {holder['e']}")
     vocals = holder["v"]
 
-    progress(0.55, desc=f"Loading model '{whisper_model}'…")
-    yield "🎙️ Vocals isolated · loading model…", "", [], None, str(vocals), ""
-    model, _, _ = _get_model(whisper_model, threads)
+    # Same here: the lyrics model can be a big first-time download, so stream a
+    # live counter while it loads instead of freezing the bar at one spot.
+    model, _, _ = yield from _load_model_streaming(whisper_model, threads, pct=0.54)
 
-    status, text, rows, segments, info = "Reading lyrics…", "", [], [], None
+    segments, info = [], None
     t1 = time.time()
     for kind, payload in core.transcribe_stream(
         model, vocals,
@@ -316,68 +457,63 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
     ):
         if kind == "info":
             info = payload
-            status = f"🎤 {info.language} ({info.language_probability:.0%}) · vocals {info.duration:.0f}s"
-            yield status, text, rows, None, str(vocals), ""
+            yield {"percent": 0.56, "label": "Reading the lyrics…",
+                   "sub": f"{info.language} · vocals {info.duration:.0f}s"}
         else:
             seg = payload
             segments.append(seg)
-            text += seg.text
-            rows = rows + [_row(seg)]
             if info and info.duration:
-                progress(0.55 + 0.4 * min(seg.end / info.duration, 1.0), desc="Transcribing lyrics…")
-            yield status, text.strip(), rows, None, str(vocals), ""
+                frac = min(seg.end / info.duration, 1.0)
+                sub = f"{core._ts(seg.end)} / {core._ts(info.duration)}"
+            else:
+                frac, sub = 0.5, ""
+            # reading lyrics occupies 56% -> ~98% of the bar
+            yield {"percent": 0.56 + 0.42 * frac, "label": "Reading the lyrics…", "sub": sub}
 
     result = core._build_result(info, segments, time.time() - t1)
     written = core.write_all(result, OUTPUT_DIR, f"{Path(audio_path).stem}.lyrics",
                              ("txt", "srt", "json"))
-    progress(0.98, desc="Building karaoke player…")
     kara = build_karaoke_html(result, vocals)
-    progress(1.0, desc="Done")
-    yield (f"✅ Lyrics done · {len(segments)} lines · {result.elapsed:.0f}s (+ separation)",
-           result.text, rows, [str(p) for p in written], str(vocals), kara)
+    yield {"done": True,
+           "text": result.text,
+           "rows": [_row(s) for s in segments],
+           "files": [str(p) for p in written],
+           "kara": kara,
+           "vocals": str(vocals),
+           "summary": f"### ✅ Lyrics ready\n{len(segments)} lines · {result.elapsed:.0f}s (＋ separation time)"}
 
 
 # --------------------------------------------------------------------------- #
-# Button handlers (validate, then delegate to the generators above)
+# UI plumbing: drive an engine generator and route its events to components
 # --------------------------------------------------------------------------- #
-def ui_speech(audio, model_name, language, task, beam_size, vad, word_ts,
-              prompt, threads, progress=gr.Progress()):
-    if not audio:
-        raise gr.Error("Please upload a file or record from your microphone first.")
-    yield from _process_speech(audio, model_name, language, task, beam_size,
-                               vad, word_ts, prompt, threads, progress)
+def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara, vocals=None):
+    """Run `gen` and send each event to the right Gradio component.
+
+    While it works, ONLY the progress bar (`pbar`) changes — that's why nothing
+    flickers any more. When the engine signals "done", we hide the progress
+    screen, reveal the results screen, and fill everything in at once.
+    """
+    for ev in gen:
+        if ev.get("done"):
+            out = {
+                progress: gr.update(visible=False),
+                results: gr.update(visible=True),
+                summary: ev.get("summary", "### ✅ Done"),
+                text: ev["text"],
+                segs: ev["rows"],
+                files: ev["files"],
+                kara: ev["kara"] or _KARA_EMPTY,
+            }
+            if vocals is not None:
+                out[vocals] = ev.get("vocals")
+            yield out
+        else:
+            yield {pbar: progress_html(ev["percent"], ev["label"], ev.get("sub", ""))}
 
 
-def ui_lyrics(audio, whisper_model, demucs_model, language, max_seconds,
-              vad, threads, progress=gr.Progress()):
-    if not audio:
-        raise gr.Error("Please upload a song first.")
-    yield from _process_lyrics(audio, whisper_model, demucs_model, language,
-                               max_seconds, vad, threads, progress)
-
-
-def ui_youtube(url, mode, whisper_model, demucs_model, language, task,
-               max_seconds, vad, threads, progress=gr.Progress()):
-    if not (url or "").strip():
-        raise gr.Error("Paste a link (e.g. a YouTube URL) first.")
-    progress(0.0, desc="Downloading audio from the link…")
-    yield "### ⏬ Downloading audio…", "Fetching audio from the link…", "", [], None, None, ""
-    try:
-        audio, title = download_audio(url.strip(), INPUT_DIR)
-    except Exception as exc:  # surface a clean message in the UI
-        raise gr.Error(f"Could not download that link: {exc}")
-
-    head = f"### 🎬 {title}"
-    if mode.startswith("Song"):
-        for status, text, rows, files, vocals, kara in _process_lyrics(
-            str(audio), whisper_model, demucs_model, language, max_seconds, vad, threads, progress
-        ):
-            yield head, status, text, rows, files, vocals, kara
-    else:
-        for status, text, rows, files, kara in _process_speech(
-            str(audio), whisper_model, language, task, 5, vad, True, None, threads, progress
-        ):
-            yield head, status, text, rows, files, None, kara
+def _go_setup():
+    """Send the user back to the setup screen (used by the 'start over' buttons)."""
+    return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -385,7 +521,8 @@ def ui_youtube(url, mode, whisper_model, demucs_model, language, task,
 # --------------------------------------------------------------------------- #
 def _model_dropdown(label="Whisper model", value="large-v3-turbo"):
     return gr.Dropdown(WHISPER_MODELS, value=value, label=label,
-                       info="turbo = fast + great. large-v3 = max accuracy. "
+                       info="turbo = fast + great (recommended on a CPU). large-v3 = top "
+                            "accuracy but a ~3 GB download and much slower on CPU. "
                             "A new model downloads once (needs internet).")
 
 
@@ -400,118 +537,214 @@ def build_ui() -> gr.Blocks:
         gr.Markdown(
             "# 🎙️🎵 Sonari\n"
             "Turn audio into text — **speech** or **song lyrics** — running fully "
-            "on your own computer. Pick a file (or a YouTube link), choose your "
-            "options, press the button, and use the **karaoke player** to follow along."
+            "on your own computer. Pick a file (or a YouTube link) and your options, "
+            "press the button, watch the progress bar, then follow along in the "
+            "**karaoke player**."
         )
 
-        # ---- Tab 1: Speech -> text ---------------------------------------- #
+        # ================= TAB 1: Speech → text ========================= #
         with gr.Tab("🎙️ Speech → text"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    sp_audio = gr.Audio(sources=["upload", "microphone"],
-                                        type="filepath", label="Audio / video file or recording")
-                    sp_model = _model_dropdown()
-                    with gr.Row():
-                        sp_lang = _lang_dropdown()
-                        sp_task = gr.Radio(["transcribe", "translate"], value="transcribe",
-                                           label="Task", info="translate = output English")
-                    with gr.Accordion("Advanced options", open=False):
-                        sp_beam = gr.Slider(1, 10, value=5, step=1, label="Beam size (higher = more accurate, slower)")
-                        sp_vad = gr.Checkbox(value=True, label="Skip silence (voice-activity detection)")
-                        sp_words = gr.Checkbox(value=True, label="Word-level timestamps")
-                        sp_prompt = gr.Textbox(label="Hint words / spellings (names, jargon)", placeholder="optional")
-                        sp_threads = gr.Slider(0, 16, value=0, step=1, label="CPU threads (0 = auto)")
-                    sp_btn = gr.Button("Transcribe", variant="primary")
-                with gr.Column(scale=1):
-                    sp_status = gr.Markdown()
-                    sp_text = gr.Textbox(label="Transcript", lines=12)
+            # ---- SCREEN 1: setup ----
+            with gr.Column() as sp_setup:
+                sp_audio = gr.Audio(sources=["upload", "microphone"],
+                                    type="filepath", label="Audio / video file or microphone recording")
+                sp_model = _model_dropdown()
+                with gr.Row():
+                    sp_lang = _lang_dropdown()
+                    sp_task = gr.Radio(["transcribe", "translate"], value="transcribe",
+                                       label="Task", info="translate = output English")
+                with gr.Accordion("Advanced options", open=False):
+                    sp_beam = gr.Slider(1, 10, value=5, step=1, label="Beam size (higher = more accurate, slower)")
+                    sp_vad = gr.Checkbox(value=True, label="Skip silence (voice-activity detection)")
+                    sp_words = gr.Checkbox(value=True, label="Word-level timestamps (needed for karaoke)")
+                    sp_prompt = gr.Textbox(label="Hint words / spellings (names, jargon)", placeholder="optional")
+                    sp_threads = gr.Slider(0, 16, value=0, step=1, label="CPU threads (0 = auto)")
+                sp_btn = gr.Button("Transcribe  →", variant="primary", size="lg")
+
+            # ---- SCREEN 2a: progress ----
+            with gr.Column(visible=False) as sp_progress:
+                sp_pbar = gr.HTML(progress_html(0.0, "Getting ready…"))
+                gr.Markdown("*Working on your own computer — you can leave this tab open.*")
+
+            # ---- SCREEN 2b: results (revealed when finished) ----
+            with gr.Column(visible=False) as sp_results:
+                with gr.Row():
+                    sp_summary = gr.Markdown()
+                    sp_back = gr.Button("⬅ New transcription", size="sm")
+                with gr.Accordion("🎤 Karaoke player", open=True):
+                    sp_kara = gr.HTML()
+                sp_text = gr.Textbox(label="Transcript", lines=10)
+                with gr.Accordion("Segments & downloads", open=False):
                     sp_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
                                            label="Segments (with timestamps)")
                     sp_files = gr.File(label="Download (txt / srt / vtt / json)", file_count="multiple")
-                    with gr.Accordion("🎤 Karaoke player", open=False):
-                        sp_kara = gr.HTML()
+
+            def ui_speech(audio, model_name, language, task, beam, vad, words, prompt, threads):
+                if not audio:
+                    raise gr.Error("Please choose a file or record from your microphone first.")
+                # flip to the progress screen straight away …
+                yield {sp_setup: gr.update(visible=False),
+                       sp_progress: gr.update(visible=True),
+                       sp_results: gr.update(visible=False),
+                       sp_pbar: progress_html(0.0, "Getting ready…", "Warming up.")}
+                # … then let the engine run, routing its events to the components.
+                gen = _process_speech(audio, model_name, language, task, beam, vad, words, prompt, threads)
+                yield from _pump(gen, progress=sp_progress, results=sp_results, pbar=sp_pbar,
+                                 summary=sp_summary, text=sp_text, segs=sp_segs, files=sp_files, kara=sp_kara)
+
             sp_btn.click(
                 ui_speech,
                 inputs=[sp_audio, sp_model, sp_lang, sp_task, sp_beam, sp_vad, sp_words, sp_prompt, sp_threads],
-                outputs=[sp_status, sp_text, sp_segs, sp_files, sp_kara],
+                outputs=[sp_setup, sp_progress, sp_results, sp_pbar, sp_summary, sp_text, sp_segs, sp_files, sp_kara],
+                show_progress="hidden",  # we draw our own bar; hide Gradio's flickery one
             )
+            sp_back.click(_go_setup, outputs=[sp_setup, sp_progress, sp_results])
 
-        # ---- Tab 2: Song -> lyrics ---------------------------------------- #
+        # ================= TAB 2: Song → lyrics ========================= #
         with gr.Tab("🎵 Song → lyrics"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    ly_audio = gr.Audio(sources=["upload"], type="filepath", label="Song file")
-                    ly_model = _model_dropdown()
-                    with gr.Row():
-                        ly_demucs = gr.Dropdown(DEMUCS_MODELS, value="htdemucs", label="Vocal separator",
-                                                info="htdemucs = default. _ft = slower but cleaner.")
-                        ly_lang = _lang_dropdown()
-                    ly_max = gr.Slider(0, 120, value=0, step=5,
-                                       label="Test only first N seconds (0 = whole song)")
-                    ly_vad = gr.Checkbox(value=False, label="Skip silence (VAD)",
-                                         info="Leave OFF for songs — ON can drop repeated lines and mangle singing.")
-                    with gr.Accordion("Advanced options", open=False):
-                        ly_threads = gr.Slider(0, 16, value=0, step=1, label="CPU threads (0 = auto)")
-                    ly_btn = gr.Button("Extract lyrics", variant="primary")
-                    gr.Markdown("_Separating vocals is the slow part on a CPU — a 3–4 min song "
-                                "can take several minutes. Use the slider to test the first 30s first._")
-                with gr.Column(scale=1):
-                    ly_status = gr.Markdown()
-                    ly_text = gr.Textbox(label="Lyrics", lines=10)
-                    with gr.Accordion("🎤 Karaoke player", open=True):
-                        ly_kara = gr.HTML()
+            # ---- SCREEN 1: setup ----
+            with gr.Column() as ly_setup:
+                ly_audio = gr.Audio(sources=["upload"], type="filepath", label="Song file")
+                ly_model = _model_dropdown()
+                with gr.Row():
+                    ly_demucs = gr.Dropdown(DEMUCS_MODELS, value="htdemucs", label="Vocal separator",
+                                            info="htdemucs = default. _ft = slower but cleaner.")
+                    ly_lang = _lang_dropdown()
+                ly_max = gr.Slider(0, 120, value=0, step=5,
+                                   label="Test only first N seconds (0 = whole song)")
+                ly_vad = gr.Checkbox(value=False, label="Skip silence (VAD)",
+                                     info="Leave OFF for songs — ON can drop repeated lines and mangle singing.")
+                with gr.Accordion("Advanced options", open=False):
+                    ly_threads = gr.Slider(0, 16, value=0, step=1, label="CPU threads (0 = auto)")
+                ly_btn = gr.Button("Extract lyrics  →", variant="primary", size="lg")
+                gr.Markdown("_Separating vocals is the slow part on a CPU — a 3–4 min song "
+                            "can take several minutes. Use the slider to test the first 30s first._")
+
+            # ---- SCREEN 2a: progress ----
+            with gr.Column(visible=False) as ly_progress:
+                ly_pbar = gr.HTML(progress_html(0.0, "Getting ready…"))
+                gr.Markdown("*The vocal-separation step is the slow one on a CPU — "
+                            "the bar keeps moving while it works.*")
+
+            # ---- SCREEN 2b: results ----
+            with gr.Column(visible=False) as ly_results:
+                with gr.Row():
+                    ly_summary = gr.Markdown()
+                    ly_back = gr.Button("⬅ New song", size="sm")
+                with gr.Accordion("🎤 Karaoke player", open=True):
+                    ly_kara = gr.HTML()
+                ly_text = gr.Textbox(label="Lyrics", lines=10)
+                with gr.Accordion("Lines, isolated vocals & downloads", open=False):
                     ly_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
                                            label="Lines (with timestamps)")
                     ly_vocals = gr.Audio(label="Isolated vocals", type="filepath", interactive=False)
                     ly_files = gr.File(label="Download (txt / srt / json)", file_count="multiple")
+
+            def ui_lyrics(audio, whisper_model, demucs_model, language, max_seconds, vad, threads):
+                if not audio:
+                    raise gr.Error("Please upload a song first.")
+                yield {ly_setup: gr.update(visible=False),
+                       ly_progress: gr.update(visible=True),
+                       ly_results: gr.update(visible=False),
+                       ly_pbar: progress_html(0.0, "Getting ready…")}
+                gen = _process_lyrics(audio, whisper_model, demucs_model, language, max_seconds, vad, threads)
+                yield from _pump(gen, progress=ly_progress, results=ly_results, pbar=ly_pbar,
+                                 summary=ly_summary, text=ly_text, segs=ly_segs, files=ly_files,
+                                 kara=ly_kara, vocals=ly_vocals)
+
             ly_btn.click(
                 ui_lyrics,
                 inputs=[ly_audio, ly_model, ly_demucs, ly_lang, ly_max, ly_vad, ly_threads],
-                outputs=[ly_status, ly_text, ly_segs, ly_files, ly_vocals, ly_kara],
+                outputs=[ly_setup, ly_progress, ly_results, ly_pbar, ly_summary, ly_text,
+                         ly_segs, ly_files, ly_kara, ly_vocals],
+                show_progress="hidden",
             )
+            ly_back.click(_go_setup, outputs=[ly_setup, ly_progress, ly_results])
 
-        # ---- Tab 3: From a link (YouTube) --------------------------------- #
+        # ================= TAB 3: From a link (YouTube) ================= #
         with gr.Tab("▶️ From a link (YouTube)"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    yt_url = gr.Textbox(label="Link", placeholder="https://www.youtube.com/watch?v=…")
-                    yt_mode = gr.Radio(["Song → lyrics", "Speech → transcript"],
-                                       value="Song → lyrics", label="What is it?")
-                    yt_model = _model_dropdown()
-                    with gr.Row():
-                        yt_demucs = gr.Dropdown(DEMUCS_MODELS, value="htdemucs", label="Vocal separator (songs)")
-                        yt_lang = _lang_dropdown()
-                    yt_task = gr.Radio(["transcribe", "translate"], value="transcribe",
-                                       label="Task (speech mode)", info="translate = output English")
-                    yt_max = gr.Slider(0, 120, value=0, step=5,
-                                       label="Test only first N seconds (0 = whole thing)")
-                    yt_vad = gr.Checkbox(value=False, label="Skip silence (VAD)",
-                                         info="Leave OFF for songs.")
-                    with gr.Accordion("Advanced options", open=False):
-                        yt_threads = gr.Slider(0, 16, value=0, step=1, label="CPU threads (0 = auto)")
-                    yt_btn = gr.Button("Download & process", variant="primary")
-                    gr.Markdown("_Downloading needs internet. Only download audio you're allowed to use._")
-                with gr.Column(scale=1):
-                    yt_title = gr.Markdown()
-                    yt_status = gr.Markdown()
-                    yt_text = gr.Textbox(label="Result", lines=10)
-                    with gr.Accordion("🎤 Karaoke player", open=True):
-                        yt_kara = gr.HTML()
+            # ---- SCREEN 1: setup ----
+            with gr.Column() as yt_setup:
+                yt_url = gr.Textbox(label="Link", placeholder="https://www.youtube.com/watch?v=…")
+                yt_mode = gr.Radio(["Song → lyrics", "Speech → transcript"],
+                                   value="Song → lyrics", label="What is it?")
+                yt_model = _model_dropdown()
+                with gr.Row():
+                    yt_demucs = gr.Dropdown(DEMUCS_MODELS, value="htdemucs", label="Vocal separator (songs)")
+                    yt_lang = _lang_dropdown()
+                yt_task = gr.Radio(["transcribe", "translate"], value="transcribe",
+                                   label="Task (speech mode)", info="translate = output English")
+                yt_max = gr.Slider(0, 120, value=0, step=5,
+                                   label="Test only first N seconds (0 = whole thing)")
+                yt_vad = gr.Checkbox(value=False, label="Skip silence (VAD)",
+                                     info="Leave OFF for songs.")
+                with gr.Accordion("Advanced options", open=False):
+                    yt_threads = gr.Slider(0, 16, value=0, step=1, label="CPU threads (0 = auto)")
+                yt_btn = gr.Button("Download & process  →", variant="primary", size="lg")
+                gr.Markdown("_Downloading needs internet. Only download audio you're allowed to use._")
+
+            # ---- SCREEN 2a: progress ----
+            with gr.Column(visible=False) as yt_progress:
+                yt_pbar = gr.HTML(progress_html(0.0, "Getting ready…"))
+                gr.Markdown("*Downloads first, then the same steps as the other tabs.*")
+
+            # ---- SCREEN 2b: results ----
+            with gr.Column(visible=False) as yt_results:
+                yt_title = gr.Markdown()
+                with gr.Row():
+                    yt_summary = gr.Markdown()
+                    yt_back = gr.Button("⬅ New link", size="sm")
+                with gr.Accordion("🎤 Karaoke player", open=True):
+                    yt_kara = gr.HTML()
+                yt_text = gr.Textbox(label="Result", lines=10)
+                with gr.Accordion("Segments, isolated vocals & downloads", open=False):
                     yt_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
                                            label="Segments (with timestamps)")
                     yt_vocals = gr.Audio(label="Isolated vocals (songs)", type="filepath", interactive=False)
                     yt_files = gr.File(label="Download", file_count="multiple")
+
+            def ui_youtube(url, mode, model_name, demucs_model, language, task, max_seconds, vad, threads):
+                if not (url or "").strip():
+                    raise gr.Error("Paste a link (for example a YouTube URL) first.")
+                yield {yt_setup: gr.update(visible=False),
+                       yt_progress: gr.update(visible=True),
+                       yt_results: gr.update(visible=False),
+                       yt_title: "",
+                       yt_vocals: None,
+                       yt_pbar: progress_html(0.0, "Downloading audio from the link…", "Needs internet.")}
+                try:
+                    audio, title = download_audio(url.strip(), INPUT_DIR)
+                except Exception as exc:  # surface a clean message in the UI
+                    raise gr.Error(f"Could not download that link: {exc}")
+
+                yield {yt_title: f"### 🎬 {title}",
+                       yt_pbar: progress_html(0.03, "Got the audio — starting…", title)}
+
+                if mode.startswith("Song"):
+                    gen = _process_lyrics(str(audio), model_name, demucs_model, language,
+                                          max_seconds, vad, threads)
+                    yield from _pump(gen, progress=yt_progress, results=yt_results, pbar=yt_pbar,
+                                     summary=yt_summary, text=yt_text, segs=yt_segs, files=yt_files,
+                                     kara=yt_kara, vocals=yt_vocals)
+                else:
+                    gen = _process_speech(str(audio), model_name, language, task, 5, vad, True, None, threads)
+                    yield from _pump(gen, progress=yt_progress, results=yt_results, pbar=yt_pbar,
+                                     summary=yt_summary, text=yt_text, segs=yt_segs, files=yt_files, kara=yt_kara)
+
             yt_btn.click(
                 ui_youtube,
                 inputs=[yt_url, yt_mode, yt_model, yt_demucs, yt_lang, yt_task, yt_max, yt_vad, yt_threads],
-                outputs=[yt_title, yt_status, yt_text, yt_segs, yt_files, yt_vocals, yt_kara],
+                outputs=[yt_setup, yt_progress, yt_results, yt_pbar, yt_title, yt_summary, yt_text,
+                         yt_segs, yt_files, yt_kara, yt_vocals],
+                show_progress="hidden",
             )
+            yt_back.click(_go_setup, outputs=[yt_setup, yt_progress, yt_results])
 
         gr.Markdown("---\nResults are also saved to the **output/** folder. "
                     "Everything runs locally; the only step that needs internet is "
                     "downloading a link or a model you haven't used before.")
 
-        demo.load(js=KARA_JS)  # install karaoke styles + behaviour once per page
+        demo.load(js=INIT_JS)  # install all custom styles + karaoke behaviour once per page
     return demo
 
 
