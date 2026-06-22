@@ -27,6 +27,21 @@ def have_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def _enabled_js_runtimes() -> dict:
+    """JavaScript runtimes yt-dlp may use to unlock YouTube downloads.
+
+    YouTube now requires *running its player JavaScript* to sign the media URLs;
+    with no JS runtime available, yt-dlp gets a plain "HTTP Error 403: Forbidden"
+    on the actual audio download (extraction still succeeds, which is what makes
+    the error so confusing). yt-dlp only auto-enables Deno, so here we also enable
+    Node / Bun when they're on PATH — most machines already have Node installed.
+
+    Returns a dict like {"node": {}} for yt-dlp's `js_runtimes` option, or {} if
+    none are found (the caller turns that into a friendly install message).
+    """
+    return {name: {} for name in ("deno", "node", "bun") if shutil.which(name)}
+
+
 def download_audio(url: str, out_dir, prefer_mp3: bool = True) -> tuple[Path, str]:
     """Download the best audio from `url` into `out_dir`.
 
@@ -37,12 +52,21 @@ def download_audio(url: str, out_dir, prefer_mp3: bool = True) -> tuple[Path, st
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    runtimes = _enabled_js_runtimes()
+    if not runtimes:
+        raise RuntimeError(
+            "YouTube needs a JavaScript runtime to unlock downloads (otherwise it "
+            "returns 403 Forbidden). Please install Node.js from https://nodejs.org "
+            "(the easiest option on Windows), then restart the app and try again."
+        )
+
     convert = prefer_mp3 and have_ffmpeg()
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": str(out_dir / "%(title)s.%(ext)s"),
         "noplaylist": True,          # a link to a video in a playlist -> just that video
         "restrictfilenames": True,   # ASCII-safe filenames (avoids Windows/unicode issues)
+        "js_runtimes": runtimes,     # let yt-dlp use Node/Deno to sign URLs (avoids 403)
         "quiet": True,
         "no_warnings": True,
     }

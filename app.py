@@ -51,8 +51,11 @@ from media import download_audio
 PROJECT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = PROJECT_DIR / "input"
 OUTPUT_DIR = PROJECT_DIR / "output"
+# Small audio files the karaoke player streams from (see build_karaoke_html).
+KARAOKE_DIR = OUTPUT_DIR / "karaoke"
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+KARAOKE_DIR.mkdir(exist_ok=True)
 
 # Choices shown in the dropdowns ------------------------------------------------
 WHISPER_MODELS = ["large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"]
@@ -228,34 +231,79 @@ def progress_html(percent: float, label: str, sub: str = "") -> str:
 # --------------------------------------------------------------------------- #
 # Karaoke player (self-contained HTML + a tiny bit of JS, wired up on load)
 # --------------------------------------------------------------------------- #
-def _audio_ogg_data_uri(path):
-    """Encode an audio file to a small OGG/Vorbis data URI for the <audio> tag.
+def _read_mono(src):
+    """Load any audio file to (mono float32 samples, sample_rate).
 
-    Downmixes to mono and writes in chunks — writing a big buffer in one go
-    crashes libsndfile's Vorbis encoder on Windows. Returns None on failure
-    (e.g. a video/m4a that the audio library can't read), so the player is just
-    skipped rather than breaking the run.
+    Tries soundfile first (wav/flac/ogg); falls back to faster-whisper's bundled
+    PyAV decoder for mp3/m4a/webm/opus, so the karaoke player also works for
+    those — including YouTube downloads made without a system ffmpeg.
     """
-    try:
-        import base64
-        import io
+    import numpy as np
 
-        import numpy as np
+    try:
         import soundfile as sf
 
-        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
-        mono = np.clip(data.mean(axis=1), -1.0, 1.0)
-        buf = io.BytesIO()
-        with sf.SoundFile(buf, mode="w", samplerate=int(sr), channels=1,
-                          format="OGG", subtype="VORBIS") as f:
-            step = 32768
-            for i in range(0, len(mono), step):
-                f.write(mono[i:i + step])
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        return f"data:audio/ogg;base64,{b64}"
+        data, sr = sf.read(str(src), dtype="float32", always_2d=True)
+        return np.clip(data.mean(axis=1), -1.0, 1.0), int(sr)
+    except Exception:
+        from faster_whisper.audio import decode_audio
+
+        sr = 16000
+        mono = np.asarray(decode_audio(str(src), sampling_rate=sr), dtype="float32")
+        return np.clip(mono, -1.0, 1.0), sr
+
+
+def _karaoke_audio_file(src):
+    """Encode the karaoke audio to a small mono OGG ON DISK and return its path.
+
+    Earlier versions embedded the whole track as a base64 `data:` URI right in
+    the results HTML. For a full song that string is ~2.5 MB, and cramming it
+    into the single "done" update made that message too big for the browser to
+    render — so the results screen never appeared and you were left looking at
+    just the page footer. Writing a small file and letting Gradio serve it (see
+    build_karaoke_html) keeps that final update tiny and reliable.
+
+    The filename is a hash of the source path + last-modified time, so re-running
+    the same song reuses the file (and the browser cache), while a changed source
+    re-encodes. Returns None if the audio can't be decoded (player is skipped).
+    Writes in chunks — handing libsndfile's Vorbis encoder one big buffer crashes
+    it on Windows.
+    """
+    try:
+        import hashlib
+
+        import soundfile as sf
+
+        src = Path(src)
+        key = hashlib.md5(
+            f"{src.resolve()}:{src.stat().st_mtime_ns}".encode()
+        ).hexdigest()[:16]
+        out = KARAOKE_DIR / f"{key}.ogg"
+        if not out.exists():
+            mono, sr = _read_mono(src)
+            with sf.SoundFile(str(out), mode="w", samplerate=int(sr), channels=1,
+                              format="OGG", subtype="VORBIS") as f:
+                step = 32768
+                for i in range(0, len(mono), step):
+                    f.write(mono[i:i + step])
+        return out
     except Exception as exc:
-        print(f"[karaoke] could not encode audio ({exc}); skipping the player.")
+        print(f"[karaoke] could not prepare audio ({exc}); skipping the player.")
         return None
+
+
+def _gradio_file_url(path) -> str:
+    """A URL the browser can stream a local file from, served by Gradio itself.
+
+    Gradio serves files at /gradio_api/file=<path> (with HTTP Range support, so
+    seeking / click-to-jump works) as long as the file lives inside one of the
+    allowed_paths folders — we pass OUTPUT_DIR in main(). We give it the absolute
+    path with forward slashes and percent-encode it so the Windows drive ':' and
+    any spaces survive the trip through the URL.
+    """
+    from urllib.parse import quote
+
+    return "/gradio_api/file=" + quote(Path(path).resolve().as_posix(), safe="/")
 
 
 def build_karaoke_html(result, audio_path) -> str:
@@ -264,9 +312,10 @@ def build_karaoke_html(result, audio_path) -> str:
     Word-level <span>s carry their own start/end so the JS can light up each word
     as it's sung. Returns "" if the audio couldn't be embedded.
     """
-    uri = _audio_ogg_data_uri(audio_path)
-    if not uri:
+    audio_file = _karaoke_audio_file(audio_path)
+    if not audio_file:
         return ""
+    src = _gradio_file_url(audio_file)
 
     uid = str(int(time.time() * 1000))
     lines = []
@@ -297,7 +346,7 @@ def build_karaoke_html(result, audio_path) -> str:
         '<audio class="kara-audio" controls preload="metadata" src="%s"></audio>'
         '<div class="kara-lyrics">%s</div>'
         '</div>'
-    ) % (uid, uri, body)
+    ) % (uid, src, body)
 
 
 # Shown in the results area if the audio couldn't be embedded for the player.
@@ -817,7 +866,10 @@ def build_ui() -> gr.Blocks:
 def main() -> None:
     demo = build_ui()
     demo.queue()  # required for live streaming + progress bars
-    demo.launch(theme=gr.themes.Soft(), inbrowser=True, show_error=True)
+    # allowed_paths lets the browser stream the karaoke audio files we write to
+    # output/ (see _gradio_file_url); without it Gradio blocks serving them.
+    demo.launch(theme=gr.themes.Soft(), inbrowser=True, show_error=True,
+                allowed_paths=[str(OUTPUT_DIR)])
 
 
 if __name__ == "__main__":
