@@ -63,7 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Speech -> text with faster-whisper (large-v3 by default).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("input", help="audio/video file, or a folder of them")
+    ap.add_argument("input", nargs="?", help="audio/video file, or a folder of them")
+    ap.add_argument("--url", default=None,
+                    help="download audio from a YouTube (or other) link first, then transcribe")
     ap.add_argument("--model", default="large-v3-turbo",
                     help="large-v3-turbo (default, best for this laptop) | large-v3 (max accuracy, slow) "
                          "| medium | small | base | tiny")
@@ -91,7 +93,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    inputs = gather_inputs(args.input)
+
+    if args.url:
+        from media import download_audio
+        print(f"[youtube] downloading audio from: {args.url}")
+        audio, title = download_audio(args.url, PROJECT_DIR / "input")
+        print(f"[youtube] got: {audio.name}")
+        inputs = [audio]
+    elif args.input:
+        inputs = gather_inputs(args.input)
+    else:
+        sys.exit("ERROR: provide an input file/folder, or --url <link>")
+
     formats = tuple(f.strip() for f in args.formats.split(",") if f.strip())
 
     model, device, compute_type = core.load_model(

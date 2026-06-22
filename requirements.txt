@@ -16,3 +16,9 @@ demucs>=4.0.1
 # Makes Python trust the Windows certificate store so HTTPS works through
 # AVG/Avast antivirus SSL inspection (downloads of models, pip, etc.).
 pip-system-certs
+
+# --- Visual app (web UI) + online (link) input ---
+# gradio: the local browser interface (app.py).
+# yt-dlp: download audio from a YouTube (or other) link.
+gradio>=4.44
+yt-dlp>=2024.8.6

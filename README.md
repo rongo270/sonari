@@ -16,6 +16,8 @@ no internet.
 - 🌍 **99+ languages** — auto-detect, or translate any language into English
 - 💻 **Offline & private** — runs locally on CPU; your audio never leaves your machine
 - ⚡ **One-click setup** — installer scripts for Windows and macOS/Linux fetch everything for you
+- 🖥️ **Visual app** — a simple browser UI (`app.py`) with model/option pickers; the command line still works too
+- ▶️ **From a link** — paste a YouTube URL and Sonari fetches the audio, then transcribes it
 
 ---
 
@@ -57,6 +59,21 @@ transcribe input\jfk.flac        # Windows
 lyrics "input\song.mp3"          # Windows
 ./lyrics.sh "input/song.mp3"     # macOS / Linux
 ```
+
+**Prefer buttons? Launch the visual app:**
+```bash
+app             # Windows (or just double-click app.bat)
+./app.sh        # macOS / Linux
+```
+It opens in your browser with tabs for **speech**, **lyrics**, and **YouTube links** —
+pick a file, choose a model, and watch the text appear as it transcribes.
+
+**Straight from a link** (works in the app *or* the terminal):
+```bash
+lyrics --url "https://www.youtube.com/watch?v=..."        # song → lyrics
+transcribe --url "https://www.youtube.com/watch?v=..."    # talk → text
+```
+
 Your results appear in the **`output/`** folder.
 
 ---

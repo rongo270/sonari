@@ -88,6 +88,62 @@ class TranscriptResult:
     elapsed: float
 
 
+def transcribe_stream(
+    model: WhisperModel,
+    audio_path,
+    *,
+    language: str | None = None,
+    task: str = "transcribe",          # "transcribe" or "translate" (to English)
+    beam_size: int = 5,
+    vad: bool = True,
+    word_timestamps: bool = True,
+    initial_prompt: str | None = None,
+    condition_on_previous_text: bool = True,
+    temperature=None,
+):
+    """Streaming/generator variant of transcribe_file.
+
+    Yields ("info", info) exactly once first, then ("segment", segment) for each
+    segment as Whisper decodes it. A UI (or transcribe_file below) consumes this
+    to show results as they arrive instead of waiting for the whole file.
+
+    `temperature` defaults to a fallback ladder: if decoding looks unreliable
+    Whisper retries with higher temperature. This greatly reduces failures on
+    hard audio.
+    """
+    if temperature is None:
+        temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+    segments_gen, info = model.transcribe(
+        str(audio_path),
+        language=language,
+        task=task,
+        beam_size=beam_size,
+        vad_filter=vad,
+        vad_parameters=({"min_silence_duration_ms": 500} if vad else None),
+        word_timestamps=word_timestamps,
+        initial_prompt=initial_prompt,
+        condition_on_previous_text=condition_on_previous_text,
+        temperature=temperature,
+    )
+
+    yield "info", info
+    for seg in segments_gen:  # streamed: decoded one chunk at a time
+        yield "segment", seg
+
+
+def _build_result(info, segments, elapsed: float) -> TranscriptResult:
+    """Assemble a TranscriptResult from the streamed info + segments."""
+    return TranscriptResult(
+        text="".join(seg.text for seg in segments).strip(),
+        segments=segments,
+        language=info.language,
+        language_probability=info.language_probability,
+        duration=info.duration,
+        elapsed=elapsed,
+    )
+
+
 def transcribe_file(
     model: WhisperModel,
     audio_path,
@@ -104,54 +160,44 @@ def transcribe_file(
 ) -> TranscriptResult:
     """Transcribe one audio file and return a TranscriptResult.
 
-    `temperature` defaults to a fallback ladder: if decoding looks unreliable
-    Whisper retries with higher temperature. This greatly reduces failures on
-    hard audio.
+    Thin wrapper over transcribe_stream that collects everything and (when
+    verbose) prints progress to the console, exactly as before.
     """
-    if temperature is None:
-        temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-
     t0 = time.time()
-    segments_gen, info = model.transcribe(
-        str(audio_path),
+    info = None
+    segments = []
+    for kind, payload in transcribe_stream(
+        model,
+        audio_path,
         language=language,
         task=task,
         beam_size=beam_size,
-        vad_filter=vad,
-        vad_parameters=({"min_silence_duration_ms": 500} if vad else None),
+        vad=vad,
         word_timestamps=word_timestamps,
         initial_prompt=initial_prompt,
         condition_on_previous_text=condition_on_previous_text,
         temperature=temperature,
-    )
-
-    if verbose:
-        print(
-            f"[lang] detected '{info.language}' "
-            f"(confidence {info.language_probability:.0%}), "
-            f"audio length {info.duration:.1f}s"
-        )
-
-    segments, parts = [], []
-    for seg in segments_gen:  # streamed: decoded one chunk at a time
-        segments.append(seg)
-        parts.append(seg.text)
-        if verbose:
-            print(f"  [{_ts(seg.start)} -> {_ts(seg.end)}] {seg.text.strip()}")
+    ):
+        if kind == "info":
+            info = payload
+            if verbose:
+                print(
+                    f"[lang] detected '{info.language}' "
+                    f"(confidence {info.language_probability:.0%}), "
+                    f"audio length {info.duration:.1f}s"
+                )
+        else:
+            seg = payload
+            segments.append(seg)
+            if verbose:
+                print(f"  [{_ts(seg.start)} -> {_ts(seg.end)}] {seg.text.strip()}")
 
     elapsed = time.time() - t0
     if verbose:
-        rtf = elapsed / info.duration if info.duration else 0
+        rtf = elapsed / info.duration if info and info.duration else 0
         print(f"[done] {elapsed:.1f}s  (={rtf:.2f}x audio length)")
 
-    return TranscriptResult(
-        text="".join(parts).strip(),
-        segments=segments,
-        language=info.language,
-        language_probability=info.language_probability,
-        duration=info.duration,
-        elapsed=elapsed,
-    )
+    return _build_result(info, segments, elapsed)
 
 
 # --------------------------------------------------------------------------- #

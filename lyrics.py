@@ -125,7 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Music -> lyrics (Demucs vocal separation + faster-whisper).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("input", help="a song file (mp3, wav, flac, m4a, ...)")
+    ap.add_argument("input", nargs="?", help="a song file (mp3, wav, flac, m4a, ...)")
+    ap.add_argument("--url", default=None,
+                    help="download audio from a YouTube (or other) link first, then make lyrics")
     ap.add_argument("--model", default="large-v3-turbo",
                     help="large-v3-turbo (default) | large-v3 (max accuracy, slow) | medium | small")
     ap.add_argument("--language", default=None, help="language code, e.g. en. Default: auto")
@@ -143,9 +145,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    audio = Path(args.input)
-    if not audio.exists():
-        sys.exit(f"ERROR: file not found: {audio}")
+
+    if args.url:
+        from media import download_audio
+        print(f"[youtube] downloading audio from: {args.url}")
+        audio, title = download_audio(args.url, PROJECT_DIR / "input")
+        print(f"[youtube] got: {audio.name}")
+    elif args.input:
+        audio = Path(args.input)
+        if not audio.exists():
+            sys.exit(f"ERROR: file not found: {audio}")
+    else:
+        sys.exit("ERROR: provide a song file, or --url <link>")
 
     formats = tuple(f.strip() for f in args.formats.split(",") if f.strip())
     overall = time.time()
