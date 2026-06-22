@@ -92,25 +92,79 @@ def _is_model_downloaded(model_name: str) -> bool:
     return False
 
 
+def _fmt_size(num) -> str:
+    """Human-readable byte size, e.g. 1.24 GB."""
+    n = float(num or 0)
+    for unit in ("B", "KB", "MB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}"
+        n /= 1024
+    return f"{n:.2f} GB"
+
+
+def _download_model_with_progress(model_name, state) -> None:
+    """Download a Whisper model from Hugging Face with VISIBLE progress.
+
+    faster-whisper deliberately hides the download bar (it passes a disabled
+    tqdm), which is exactly why a first-time download looked silent and "stuck".
+    Here we pre-fetch the model ourselves into the SAME cache folder faster-whisper
+    uses, with:
+      - a real tqdm bar  -> shows the download in the TERMINAL, and
+      - a tiny hook       -> reports bytes done/total into `state` for the WEB bar.
+    Because the files land in the same cache, the later WhisperModel(...) call
+    finds them and does NOT download again.
+    """
+    import huggingface_hub
+    from faster_whisper.utils import _MODELS
+    from tqdm.auto import tqdm as _tqdm
+
+    # Same repo + file list faster-whisper itself would use.
+    repo_id = model_name if "/" in model_name else _MODELS.get(model_name, model_name)
+    allow = ["config.json", "preprocessor_config.json", "model.bin",
+             "tokenizer.json", "vocabulary.*"]
+
+    bars: list = []
+
+    class _ReportingTqdm(_tqdm):
+        """A normal tqdm (prints to the terminal) that also sums byte progress
+        across every file being downloaded and stores it in `state`."""
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            bars.append(self)
+
+        def update(self, n=1):
+            r = super().update(n)
+            byte_bars = [b for b in bars if getattr(b, "unit", "") == "B"]
+            state["downloaded"] = sum(int(b.n or 0) for b in byte_bars)
+            state["total"] = sum(int(b.total or 0) for b in byte_bars)
+            return r
+
+    print(f"[model] '{model_name}' is not on disk yet — downloading from Hugging Face "
+          f"(one-time). Progress below:")
+    huggingface_hub.snapshot_download(
+        repo_id, cache_dir=str(core.MODELS_DIR), allow_patterns=allow,
+        tqdm_class=_ReportingTqdm,
+    )
+    print(f"[model] download of '{model_name}' complete.")
+
+
 def _load_model_streaming(model_name, threads, *, pct):
-    """Load a model on a side-thread, yielding a live 'still working' tick every
-    half-second so the progress bar never *looks* frozen during a slow first-time
-    download (the full large-v3 is a ~3 GB download). The elapsed-seconds counter
-    going up is the proof that it's working, not stuck.
+    """Load a model on a side-thread, yielding live progress so the bar never
+    *looks* frozen. If the model isn't on disk yet it is downloaded first, and
+    the bar shows the real byte progress (e.g. "1.24 GB / 3.09 GB · 40%").
 
     Returns (model, device, compute_type) — capture it with `yield from`.
     """
-    downloading = not _is_model_downloaded(model_name)
-    label = (f"Downloading the “{model_name}” model…" if downloading
-             else f"Loading the “{model_name}” model…")
-    note = ("first time only — this can be a big download (large-v3 ≈ 3 GB); "
-            "please keep this window open" if downloading
-            else "reading it from your disk…")
-
+    cached = _is_model_downloaded(model_name)
+    # `phase` flips from "download" to "load" inside the worker thread.
+    state = {"phase": "load" if cached else "download", "downloaded": 0, "total": 0}
     holder: dict = {}
 
     def _work():
         try:
+            if not cached:
+                _download_model_with_progress(model_name, state)
+            state["phase"] = "load"
             holder["m"] = _get_model(model_name, threads)
         except Exception as exc:
             holder["e"] = exc
@@ -120,8 +174,20 @@ def _load_model_streaming(model_name, threads, *, pct):
     t0 = time.time()
     while th.is_alive():
         el = int(time.time() - t0)
-        yield {"percent": pct, "label": label, "sub": f"{el}s — {note}"}
-        th.join(timeout=0.5)
+        if state["phase"] == "download":
+            done, total = state["downloaded"], state["total"]
+            label = f"⬇️ Downloading the “{model_name}” model…"
+            if total > 0:
+                sub = (f"{_fmt_size(done)} / {_fmt_size(total)} · {int(100 * done / total)}% "
+                       f"· {el}s · one-time download, please keep this open")
+            else:
+                sub = f"{el}s · contacting Hugging Face… (first-time download)"
+        else:
+            label = f"Loading the “{model_name}” model into memory…"
+            sub = f"{el}s · almost ready…"
+        yield {"percent": pct, "label": label, "sub": sub}
+        th.join(timeout=0.4)
+
     if "e" in holder:
         raise gr.Error(f"Could not load the model “{model_name}”: {holder['e']}")
     return holder["m"]
