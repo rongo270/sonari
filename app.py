@@ -352,10 +352,17 @@ def build_karaoke_html(seg_dicts, audio_source) -> str:
     return (
         '<div class="kara-root" id="kara-%s" data-wired="0">'
         '<div class="kara-bar">'
-        '<span class="kara-title">🎤 Press play — the current word lights up · click any line to jump</span>'
+        '<span class="kara-title">🎤 Press play — words light up · click the waveform or a line to jump</span>'
         '<button class="kara-fs" type="button">⛶ Fullscreen</button>'
         '</div>'
-        '<audio class="kara-audio" controls preload="metadata" src="%s"></audio>'
+        # The <audio> is now just the hidden "engine"; the custom player row below
+        # (play button · clickable Audio Waveform · time readout) drives it via JS.
+        '<audio class="kara-audio" preload="metadata" src="%s"></audio>'
+        '<div class="kara-player">'
+        '<button class="kara-play" type="button" aria-label="Play / pause">▶</button>'
+        '<canvas class="kara-wave"></canvas>'
+        '<span class="kara-time">0:00 / 0:00</span>'
+        '</div>'
         '<div class="kara-lyrics">%s</div>'
         '</div>'
     ) % (uid, src, body)
@@ -568,7 +575,15 @@ CUSTOM_CSS = """
 .kara-title{font-size:13px;color:#7a6a2a;font-weight:600}
 .kara-fs{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#8a5a00;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
 .kara-fs:hover{background:#a86d00}
-.kara-audio{width:100%;margin-bottom:14px}
+/* the <audio> is now just the hidden engine; the waveform player drives it */
+.kara-audio{display:none}
+/* custom player row: play button · clickable waveform · time-on-the-side */
+.kara-player{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.kara-play{flex:0 0 auto;width:46px;height:46px;border:0;border-radius:50%;background:#8a5a00;color:#fff;font-size:17px;cursor:pointer;transition:background .15s,transform .08s;box-shadow:0 3px 10px rgba(150,100,0,.3)}
+.kara-play:hover{background:#a86d00}
+.kara-play:active{transform:scale(.93)}
+.kara-wave{flex:1 1 auto;min-width:0;height:54px;cursor:pointer;display:block}
+.kara-time{flex:0 0 auto;min-width:88px;text-align:right;font-size:13px;font-weight:700;color:#7a6a2a;font-variant-numeric:tabular-nums}
 /* the scrolling lyrics; soft fade at top & bottom so it glides */
 .kara-lyrics{max-height:430px;overflow:auto;scroll-behavior:smooth;padding:10px 6px;-webkit-mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent);mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent)}
 /* a line has three states: UPCOMING (default, clearly readable) ·
@@ -589,6 +604,7 @@ CUSTOM_CSS = """
 .kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;text-align:center}
 .kara-root:fullscreen .kara-line{font-size:30px}
 .kara-root:fullscreen .kara-line.on{font-size:42px}
+.kara-root:fullscreen .kara-wave{height:80px}
 """
 
 
@@ -647,6 +663,132 @@ INIT_JS = r"""
         }
       });
     }
+
+    // ---- custom Audio Waveform player (offline: decoded & drawn in-browser) --
+    // Replaces the old native time bar. The <audio> above is the hidden engine;
+    // here we draw a clickable waveform on a <canvas>, fill it as the song plays
+    // and show the time (current / total) on the side. No library, no internet.
+    const playBtn = root.querySelector('.kara-play');
+    const canvas  = root.querySelector('.kara-wave');
+    const timeEl  = root.querySelector('.kara-time');
+    // We oversample the audio into a high-res envelope, then draw it as ONE
+    // smooth curved shape (not separate bars) so it looks clean. Playback fills
+    // it with a moving orange front, redrawn every animation frame for a glide.
+    const SAMPLES = 600;
+    let peaks = null, lastW = 0, lastH = 0, wavePath = null, raf = 0;
+
+    function fmt(t) {
+      if (!isFinite(t) || t < 0) t = 0;
+      const m = Math.floor(t / 60), s = Math.floor(t % 60);
+      return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+    // Build the smooth waveform silhouette (one closed Path2D) for this size.
+    // The top edge follows the envelope using quadratic curves THROUGH the
+    // points (rounded, not jagged); the bottom edge mirrors it, so the whole
+    // thing is a single smooth blob we can clip the fill into.
+    function buildPath(pw, ph) {
+      const path = new Path2D();
+      const mid = ph / 2, amp = ph * 0.46;
+      const n = peaks ? peaks.length : 2;
+      const top = [];
+      for (let i = 0; i < n; i++) {
+        const x = n < 2 ? 0 : (i / (n - 1)) * pw;
+        const p = peaks ? peaks[i] : 0.06;
+        top.push({ x: x, y: mid - Math.max(p * amp, 1) });
+      }
+      const curve = function (pts) {
+        for (let i = 0; i < pts.length - 1; i++) {
+          const xc = (pts[i].x + pts[i + 1].x) / 2, yc = (pts[i].y + pts[i + 1].y) / 2;
+          path.quadraticCurveTo(pts[i].x, pts[i].y, xc, yc);
+        }
+        const last = pts[pts.length - 1];
+        path.lineTo(last.x, last.y);
+      };
+      const bottom = top.map(function (p) { return { x: p.x, y: mid + (mid - p.y) }; }).reverse();
+      path.moveTo(top[0].x, top[0].y);
+      curve(top);
+      curve(bottom);
+      path.closePath();
+      return path;
+    }
+    function render() {
+      if (!canvas) return;
+      const cx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const pw = Math.max(1, Math.floor((canvas.clientWidth  || 1) * dpr));
+      const ph = Math.max(1, Math.floor((canvas.clientHeight || 1) * dpr));
+      if (pw !== lastW || ph !== lastH) { canvas.width = pw; canvas.height = ph; lastW = pw; lastH = ph; wavePath = null; }
+      if (!wavePath) wavePath = buildPath(pw, ph);
+      cx.clearRect(0, 0, pw, ph);
+      const prog = (audio && audio.duration) ? (audio.currentTime / audio.duration) : 0;
+      const px = Math.max(0, Math.min(pw, prog * pw));
+      cx.save();
+      cx.clip(wavePath);                       // keep every fill inside the curve
+      cx.fillStyle = 'rgba(122,106,42,.40)';   // not-yet-played part (muted gold)
+      cx.fillRect(0, 0, pw, ph);
+      if (px > 0) {                            // already-played part (orange)
+        const g = cx.createLinearGradient(0, 0, 0, ph);
+        g.addColorStop(0, '#ff8a1e'); g.addColorStop(1, '#e23b00');
+        cx.fillStyle = g;
+        cx.fillRect(0, 0, px, ph);
+      }
+      cx.restore();
+      if (timeEl && audio) timeEl.textContent = fmt(audio.currentTime) + ' / ' + fmt(audio.duration || 0);
+    }
+    // Animate only while playing (requestAnimationFrame = smooth ~60fps glide);
+    // when paused we just render once on demand, so it costs nothing idle.
+    function loop() { render(); raf = (audio && !audio.paused && !audio.ended) ? requestAnimationFrame(loop) : 0; }
+    function kick() { if (!raf) raf = requestAnimationFrame(loop); }
+
+    async function buildWave() {
+      try {
+        const buf = await (await fetch(audio.src)).arrayBuffer();
+        const AC  = window.AudioContext || window.webkitAudioContext;
+        const ac  = new AC();
+        const dec = await ac.decodeAudioData(buf);
+        if (ac.close) ac.close();
+        const data = dec.getChannelData(0);
+        const block = Math.max(1, Math.floor(data.length / SAMPLES));
+        const raw = new Array(SAMPLES); let max = 1e-4;
+        for (let i = 0; i < SAMPLES; i++) {
+          let peak = 0; const start = i * block;
+          for (let j = 0; j < block; j++) { const v = Math.abs(data[start + j] || 0); if (v > peak) peak = v; }
+          raw[i] = peak; if (peak > max) max = peak;
+        }
+        // normalise + lightly smooth (5-wide moving average) to kill the jaggies
+        const sm = new Array(SAMPLES);
+        for (let i = 0; i < SAMPLES; i++) {
+          let acc = 0, cnt = 0;
+          for (let k = -2; k <= 2; k++) { const j = i + k; if (j >= 0 && j < SAMPLES) { acc += raw[j]; cnt++; } }
+          sm[i] = (acc / cnt) / max;
+        }
+        peaks = sm;
+      } catch (e) { peaks = null; }   // decode failed -> flat line; playback still fine
+      wavePath = null;
+      render();
+    }
+
+    if (playBtn && audio) {
+      playBtn.addEventListener('click', function () { audio.paused ? audio.play() : audio.pause(); });
+      audio.addEventListener('play',  function () { playBtn.textContent = '⏸'; kick(); });
+      audio.addEventListener('pause', function () { playBtn.textContent = '▶'; render(); });
+      audio.addEventListener('ended', function () { playBtn.textContent = '▶'; render(); });
+    }
+    if (canvas && audio) {
+      canvas.addEventListener('click', function (ev) {
+        const rect = canvas.getBoundingClientRect();
+        const frac = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+        if (audio.duration) { audio.currentTime = frac * audio.duration; render(); }
+      });
+    }
+    if (audio) {
+      audio.addEventListener('seeked', render);
+      audio.addEventListener('timeupdate', render);   // keeps time text live when paused
+      audio.addEventListener('loadedmetadata', render);
+    }
+    window.addEventListener('resize', function () { wavePath = null; render(); });
+    render();
+    buildWave();
   }
   function scan() { for (const r of document.querySelectorAll('.kara-root')) wire(r); }
   scan();
