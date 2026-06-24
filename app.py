@@ -26,9 +26,10 @@ Highlights:
   - A built-in KARAOKE player: press play and the words light up in time with
     the audio, click any line to jump, and go fullscreen. For songs it plays the
     INSTRUMENTAL (a true sing-along) with a 🎤/🎹 toggle to peek at the vocals.
-  - A GUITAR-CHORD sheet: chords are heard from the music (offline) and laid
-    above the words, with buttons to transpose up/down and an "Easy" mode that
-    simplifies the chords and suggests a capo.
+  - A GUITAR-CHORD sheet: the REAL chords are heard from the music (offline) and
+    laid above the words — hard songs stay hard, easy songs stay easy. A Transpose
+    slider moves the key up/down, an "Easy" button switches to the open-chord
+    shapes you'd finger with a capo, and "Original" switches back.
   - VAD (silence skipping) defaults OFF for songs, because it tends to drop
     repeated chorus lines and mangle singing.
 
@@ -406,6 +407,12 @@ _CHORDS_EMPTY = (
     'finder works best on songs with clear guitar/piano backing.</div>'
 )
 
+# A tiny placeholder shown in the chord box for the split-second between the
+# results screen appearing and the follow-up .then(_render_sheet) painting the
+# real (possibly large) sheet. Keeping the reveal update small is what stops the
+# "results never appear / blank screen" failure (see _karaoke_audio_file).
+_CHORDS_LOADING = '<div class="cs-empty">🎸 Laying out the chords…</div>'
+
 
 def build_chord_sheet_html(sheet_model, transpose: int = 0, easy: bool = False) -> str:
     """Render the lyrics-with-chords sheet, applying transpose / easy on the fly.
@@ -413,9 +420,13 @@ def build_chord_sheet_html(sheet_model, transpose: int = 0, easy: bool = False) 
     `sheet_model` is what chords.align_chords_to_lines produced, plus the key:
         {"key": "Am", "lines": [ {"type":"lyric"/"chords", ...}, ... ]}
     We never re-detect here — this is pure, instant text work — so the Transpose
-    slider and "Easy chords" toggle just re-call this function. `transpose` shifts
-    every chord by N semitones; `easy` first simplifies chords to plain triads and
-    then suggests a capo so you can play familiar open shapes.
+    slider and the Easy / Original buttons just re-call this function.
+
+    `transpose` shifts every chord (and the key) by N semitones. By default
+    (`easy=False`) we show the REAL chords as heard — a hard song stays hard.
+    With `easy=True` we find ONE capo position that turns the song into familiar
+    open shapes and print the SHAPES YOU FINGER (e.g. "Capo 3" + C G Am F), which
+    is what actually makes a tricky song playable.
     """
     if not sheet_model or not sheet_model.get("lines"):
         return _CHORDS_EMPTY
@@ -426,10 +437,23 @@ def build_chord_sheet_html(sheet_model, transpose: int = 0, easy: bool = False) 
     new_key = chords.transpose_chord(key, transpose) if key else ""
     prefer_flats = chords.key_prefers_flats(new_key) if new_key else False
 
-    def disp(name: str) -> str:
-        """One chord name as it should appear, after easy + transpose."""
+    def sounding(name: str) -> str:
+        """The chord as it really sounds at the current transpose (triad if easy)."""
         n = chords.simplify_chord(name) if easy else name
         return chords.transpose_chord(n, transpose, prefer_flats)
+
+    # In easy mode, pick one capo for the whole song and remember the open shape
+    # each sounding chord maps to, so the body shows shapes (not concert names).
+    capo, shapes = 0, {}
+    if easy:
+        uniq_sounding = list(dict.fromkeys(
+            sounding(c) for c in chords.unique_chords(sheet_model["lines"])))
+        capo, shapes = chords.suggest_capo(uniq_sounding)
+
+    def disp(name: str) -> str:
+        """One chord exactly as it should print (the capo'd open shape in easy mode)."""
+        s = sounding(name)
+        return shapes.get(s, s)
 
     rows = []
     for ln in sheet_model["lines"]:
@@ -452,21 +476,18 @@ def build_chord_sheet_html(sheet_model, transpose: int = 0, easy: bool = False) 
                           '<span class="cs-word">%s</span></span> ') % (c, w)
             rows.append('<div class="cs-line">%s</div>' % (units or "&nbsp;"))
 
-    # Header: key, the transpose amount, and (in easy mode) a capo suggestion.
+    # Header: key, the transpose amount, and (in easy mode) the capo to put on.
     head_bits = []
     if new_key:
         head_bits.append('<span class="cs-key">Key: %s</span>' % html.escape(chords.key_long(new_key)))
     if transpose:
         head_bits.append('<span class="cs-tag">Transpose %+d</span>' % transpose)
     if easy:
-        uniq = [disp(c) for c in chords.unique_chords(sheet_model["lines"])]
-        capo, shapes = chords.suggest_capo(uniq, prefer_flats)
-        play = " ".join(dict.fromkeys(shapes.values()))  # de-duped, in order
         if capo > 0:
-            head_bits.append('<span class="cs-tag cs-capo">🎸 Capo %d → play: %s</span>'
-                             % (capo, html.escape(play)))
+            head_bits.append('<span class="cs-tag cs-capo">🎸 Easy — put a capo on fret %d, '
+                             'then play the shapes below</span>' % capo)
         else:
-            head_bits.append('<span class="cs-tag cs-capo">🎸 No capo needed</span>')
+            head_bits.append('<span class="cs-tag cs-capo">🎸 Easy — already open chords, no capo</span>')
     header = '<div class="cs-head">%s</div>' % "".join(head_bits) if head_bits else ""
 
     return '<div class="cs-root">%s<div class="cs-body">%s</div></div>' % (header, "\n".join(rows))
@@ -1126,9 +1147,15 @@ def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara,
     flickers any more. When the engine signals "done", we hide the progress
     screen, reveal the results screen, and fill everything in at once.
 
-    `chord_box`/`sheet`/`tr`/`easy` are the optional chord-sheet bits (songs
-    only): the rendered sheet, the State that backs the transpose/easy buttons,
-    and the two controls — which we reset to 0 / off for each fresh result.
+    `chord_box`/`sheet`/`tr`/`easy` are the optional chord-sheet bits (songs only):
+    the box to paint into, the State holding the chord data, the Transpose slider,
+    and the easy-vs-original State — all reset for each fresh result.
+
+    IMPORTANT: we deliberately do NOT pour the (often large) chord-sheet HTML into
+    this "done" update. A too-big reveal message stops the results screen from ever
+    appearing — the classic "song finishes but the screen stays blank" bug (the
+    same trap documented in _karaoke_audio_file). We only stash the small `sheet`
+    data here; a follow-up .then(_render_sheet) paints the chords a beat later.
     """
     for ev in gen:
         if ev.get("done"):
@@ -1144,13 +1171,13 @@ def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara,
             if vocals is not None:
                 out[vocals] = ev.get("vocals")
             if chord_box is not None:
-                out[chord_box] = ev.get("chords") or _CHORDS_EMPTY
+                out[chord_box] = _CHORDS_LOADING if ev.get("sheet") else _CHORDS_EMPTY
             if sheet is not None:
                 out[sheet] = ev.get("sheet")
             if tr is not None:
                 out[tr] = gr.update(value=0)
             if easy is not None:
-                out[easy] = gr.update(value=False)
+                out[easy] = False  # back to "Original" for a fresh song
             yield out
         else:
             yield {pbar: progress_html(ev["percent"], ev["label"], ev.get("sub", ""))}
@@ -1164,13 +1191,24 @@ def _go_setup():
 def _render_sheet(sheet_model, transpose, easy):
     """Redraw the chord sheet for the current transpose / easy settings.
 
-    Wired to the Transpose slider + Easy checkbox. If there's no sheet (e.g. a
-    speech item, or chords weren't detected) we leave whatever's shown untouched
-    rather than blanking it.
+    Wired to the Transpose slider, the Easy/Original buttons, and the post-reveal
+    .then() that paints the sheet. If there's no sheet (e.g. a speech item, or
+    chords weren't detected) we leave whatever's shown untouched rather than
+    blanking it.
     """
     if not sheet_model:
         return gr.update()
     return build_chord_sheet_html(sheet_model, int(transpose), bool(easy))
+
+
+def _set_easy(sheet_model, transpose):
+    """The 'Easy chords' button: switch to the capo/open-shape view and remember it."""
+    return True, _render_sheet(sheet_model, transpose, True)
+
+
+def _set_original(sheet_model, transpose):
+    """The 'Original' button: switch back to the real chords as heard."""
+    return False, _render_sheet(sheet_model, transpose, False)
 
 
 # --------------------------------------------------------------------------- #
@@ -1294,10 +1332,11 @@ def build_ui() -> gr.Blocks:
                     with gr.Row():
                         ly_transpose = gr.Slider(-6, 6, value=0, step=1,
                                                  label="Transpose — move the chords up / down (semitones)")
-                        ly_easy = gr.Checkbox(value=False,
-                                              label="Easy chords (simplify + suggest a capo)")
+                        ly_easy_btn = gr.Button("🎸 Easy (capo)", size="sm")
+                        ly_orig_btn = gr.Button("🎵 Original", size="sm")
                     ly_chords = gr.HTML()
-                    ly_sheet = gr.State()  # holds the chord data the buttons re-render
+                    ly_sheet = gr.State()            # the chord data the buttons re-render
+                    ly_easy_state = gr.State(False)  # remembers Easy vs Original
                 ly_text = gr.Textbox(label="Lyrics", lines=10)
                 with gr.Accordion("Lines, isolated vocals & downloads", open=False):
                     ly_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
@@ -1316,20 +1355,23 @@ def build_ui() -> gr.Blocks:
                 yield from _pump(gen, progress=ly_progress, results=ly_results, pbar=ly_pbar,
                                  summary=ly_summary, text=ly_text, segs=ly_segs, files=ly_files,
                                  kara=ly_kara, vocals=ly_vocals,
-                                 chord_box=ly_chords, sheet=ly_sheet, tr=ly_transpose, easy=ly_easy)
+                                 chord_box=ly_chords, sheet=ly_sheet, tr=ly_transpose, easy=ly_easy_state)
 
             ly_btn.click(
                 ui_lyrics,
                 inputs=[ly_audio, ly_model, ly_demucs, ly_lang, ly_max, ly_vad, ly_threads],
                 outputs=[ly_setup, ly_progress, ly_results, ly_pbar, ly_summary, ly_text,
                          ly_segs, ly_files, ly_kara, ly_vocals,
-                         ly_chords, ly_sheet, ly_transpose, ly_easy],
+                         ly_chords, ly_sheet, ly_transpose, ly_easy_state],
                 show_progress="hidden",
+            ).then(  # paint the (large) chord sheet AFTER the screen is shown — keeps the reveal small
+                _render_sheet, inputs=[ly_sheet, ly_transpose, ly_easy_state], outputs=[ly_chords]
             )
             ly_back.click(_go_setup, outputs=[ly_setup, ly_progress, ly_results])
-            # Transpose / Easy just re-draw the (already detected) chords — instant.
-            ly_transpose.change(_render_sheet, inputs=[ly_sheet, ly_transpose, ly_easy], outputs=[ly_chords])
-            ly_easy.change(_render_sheet, inputs=[ly_sheet, ly_transpose, ly_easy], outputs=[ly_chords])
+            # Transpose / Easy / Original just re-draw the (already detected) chords — instant.
+            ly_transpose.change(_render_sheet, inputs=[ly_sheet, ly_transpose, ly_easy_state], outputs=[ly_chords])
+            ly_easy_btn.click(_set_easy, inputs=[ly_sheet, ly_transpose], outputs=[ly_easy_state, ly_chords])
+            ly_orig_btn.click(_set_original, inputs=[ly_sheet, ly_transpose], outputs=[ly_easy_state, ly_chords])
 
         # ================= TAB 3: From a link (YouTube) ================= #
         with gr.Tab("▶️ From a link (YouTube)"):
@@ -1370,10 +1412,11 @@ def build_ui() -> gr.Blocks:
                     with gr.Row():
                         yt_transpose = gr.Slider(-6, 6, value=0, step=1,
                                                  label="Transpose — move the chords up / down (semitones)")
-                        yt_easy = gr.Checkbox(value=False,
-                                              label="Easy chords (simplify + suggest a capo)")
+                        yt_easy_btn = gr.Button("🎸 Easy (capo)", size="sm")
+                        yt_orig_btn = gr.Button("🎵 Original", size="sm")
                     yt_chords = gr.HTML()
                     yt_sheet = gr.State()
+                    yt_easy_state = gr.State(False)
                 yt_text = gr.Textbox(label="Result", lines=10)
                 with gr.Accordion("Segments, isolated vocals & downloads", open=False):
                     yt_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
@@ -1389,7 +1432,8 @@ def build_ui() -> gr.Blocks:
                        yt_results: gr.update(visible=False),
                        yt_title: "",
                        yt_vocals: None,
-                       yt_chords: "",  # clear any chords from a previous run
+                       yt_chords: "",     # clear any chords from a previous run
+                       yt_sheet: None,    # and forget the previous song's chord data
                        yt_pbar: progress_html(0.0, "Downloading audio from the link…", "Needs internet.")}
                 try:
                     audio, title = download_audio(url.strip(), INPUT_DIR)
@@ -1405,7 +1449,7 @@ def build_ui() -> gr.Blocks:
                     yield from _pump(gen, progress=yt_progress, results=yt_results, pbar=yt_pbar,
                                      summary=yt_summary, text=yt_text, segs=yt_segs, files=yt_files,
                                      kara=yt_kara, vocals=yt_vocals,
-                                     chord_box=yt_chords, sheet=yt_sheet, tr=yt_transpose, easy=yt_easy)
+                                     chord_box=yt_chords, sheet=yt_sheet, tr=yt_transpose, easy=yt_easy_state)
                 else:
                     gen = _process_speech(str(audio), model_name, language, task, 5, vad, True, None,
                                           threads, title=title)
@@ -1417,12 +1461,15 @@ def build_ui() -> gr.Blocks:
                 inputs=[yt_url, yt_mode, yt_model, yt_demucs, yt_lang, yt_task, yt_max, yt_vad, yt_threads],
                 outputs=[yt_setup, yt_progress, yt_results, yt_pbar, yt_title, yt_summary, yt_text,
                          yt_segs, yt_files, yt_kara, yt_vocals,
-                         yt_chords, yt_sheet, yt_transpose, yt_easy],
+                         yt_chords, yt_sheet, yt_transpose, yt_easy_state],
                 show_progress="hidden",
+            ).then(  # paint the chord sheet AFTER the screen is shown — keeps the reveal small
+                _render_sheet, inputs=[yt_sheet, yt_transpose, yt_easy_state], outputs=[yt_chords]
             )
             yt_back.click(_go_setup, outputs=[yt_setup, yt_progress, yt_results])
-            yt_transpose.change(_render_sheet, inputs=[yt_sheet, yt_transpose, yt_easy], outputs=[yt_chords])
-            yt_easy.change(_render_sheet, inputs=[yt_sheet, yt_transpose, yt_easy], outputs=[yt_chords])
+            yt_transpose.change(_render_sheet, inputs=[yt_sheet, yt_transpose, yt_easy_state], outputs=[yt_chords])
+            yt_easy_btn.click(_set_easy, inputs=[yt_sheet, yt_transpose], outputs=[yt_easy_state, yt_chords])
+            yt_orig_btn.click(_set_original, inputs=[yt_sheet, yt_transpose], outputs=[yt_easy_state, yt_chords])
 
         # ================= TAB 4: My library =========================== #
         with gr.Tab("📂 My library") as lib_tab:
@@ -1449,10 +1496,11 @@ def build_ui() -> gr.Blocks:
                     with gr.Row():
                         lib_transpose = gr.Slider(-6, 6, value=0, step=1,
                                                   label="Transpose — move the chords up / down (semitones)")
-                        lib_easy = gr.Checkbox(value=False,
-                                               label="Easy chords (simplify + suggest a capo)")
+                        lib_easy_btn = gr.Button("🎸 Easy (capo)", size="sm")
+                        lib_orig_btn = gr.Button("🎵 Original", size="sm")
                     lib_chords = gr.HTML()
                     lib_sheet = gr.State()
+                    lib_easy_state = gr.State(False)
                 lib_text = gr.Textbox(label="Text", lines=10)
                 with gr.Accordion("Lines & downloads", open=False):
                     lib_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
@@ -1480,8 +1528,9 @@ def build_ui() -> gr.Blocks:
                 else:
                     kara = build_karaoke_html(seg_dicts, vocals) or _KARA_EMPTY
                 # Chords come straight from the saved sheet (older saves have none).
+                # We stash the sheet here but let the follow-up .then(_render_sheet)
+                # paint it, so this reveal update stays small (no blank screen).
                 sheet_model = m.get("sheet")
-                chord_html = build_chord_sheet_html(sheet_model) if sheet_model else _CHORDS_EMPTY
                 rows = [[core._ts(s.get("start") or 0.0), core._ts(s.get("end") or 0.0),
                          (s.get("text") or "").strip()] for s in seg_dicts]
                 files = [f for f in (m.get("files") or []) if Path(f).exists()]
@@ -1490,16 +1539,21 @@ def build_ui() -> gr.Blocks:
                 return {lib_results: gr.update(visible=True),
                         lib_title: title_md, lib_kara: kara, lib_text: m.get("text", ""),
                         lib_segs: rows, lib_files: files,
-                        lib_chords: chord_html, lib_sheet: sheet_model,
-                        lib_transpose: gr.update(value=0), lib_easy: gr.update(value=False)}
+                        lib_chords: _CHORDS_LOADING if sheet_model else _CHORDS_EMPTY,
+                        lib_sheet: sheet_model,
+                        lib_transpose: gr.update(value=0), lib_easy_state: False}
 
             lib_refresh.click(_refresh_library, outputs=[lib_pick])
             lib_tab.select(_refresh_library, outputs=[lib_pick])  # auto-refresh on open
             lib_open.click(_open_library, inputs=[lib_pick],
                            outputs=[lib_results, lib_title, lib_kara, lib_text, lib_segs, lib_files,
-                                    lib_chords, lib_sheet, lib_transpose, lib_easy])
-            lib_transpose.change(_render_sheet, inputs=[lib_sheet, lib_transpose, lib_easy], outputs=[lib_chords])
-            lib_easy.change(_render_sheet, inputs=[lib_sheet, lib_transpose, lib_easy], outputs=[lib_chords])
+                                    lib_chords, lib_sheet, lib_transpose, lib_easy_state]
+                           ).then(  # paint the chord sheet after the screen is shown
+                               _render_sheet, inputs=[lib_sheet, lib_transpose, lib_easy_state],
+                               outputs=[lib_chords])
+            lib_transpose.change(_render_sheet, inputs=[lib_sheet, lib_transpose, lib_easy_state], outputs=[lib_chords])
+            lib_easy_btn.click(_set_easy, inputs=[lib_sheet, lib_transpose], outputs=[lib_easy_state, lib_chords])
+            lib_orig_btn.click(_set_original, inputs=[lib_sheet, lib_transpose], outputs=[lib_easy_state, lib_chords])
 
         gr.Markdown("---\nResults are also saved to the **output/** folder. "
                     "Everything runs locally; the only step that needs internet is "
