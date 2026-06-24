@@ -18,6 +18,7 @@ no internet.
 - ⚡ **One-click setup** — installer scripts for Windows and macOS/Linux fetch everything for you
 - 🖥️ **Visual app** — a simple browser UI (`app.py`) with model/option pickers; the command line still works too
 - ▶️ **From a link** — paste a YouTube URL and Sonari fetches the audio, then transcribes it
+- 🎤 **Karaoke & chords** — sing along to the **instrumental** (vocals removed) with the words lighting up in time, plus an auto-detected **guitar-chord sheet** you can transpose up/down or switch to **easy** chords with a suggested capo — all offline
 
 ---
 

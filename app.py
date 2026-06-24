@@ -24,7 +24,11 @@ The three tabs:
 Highlights:
   - A single, smooth progress bar (no more flickering / "page refreshing").
   - A built-in KARAOKE player: press play and the words light up in time with
-    the audio, click any line to jump, and go fullscreen.
+    the audio, click any line to jump, and go fullscreen. For songs it plays the
+    INSTRUMENTAL (a true sing-along) with a 🎤/🎹 toggle to peek at the vocals.
+  - A GUITAR-CHORD sheet: chords are heard from the music (offline) and laid
+    above the words, with buttons to transpose up/down and an "Easy" mode that
+    simplifies the chords and suggests a capo.
   - VAD (silence skipping) defaults OFF for songs, because it tends to drop
     repeated chorus lines and mangle singing.
 
@@ -46,8 +50,9 @@ from pathlib import Path
 
 import gradio as gr
 
+import chords
 import whisper_core as core
-from lyrics import separate_vocals
+from lyrics import separate_stems
 from media import download_audio
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -313,14 +318,19 @@ def _gradio_file_url(path) -> str:
     return "/gradio_api/file=" + quote(Path(path).resolve().as_posix(), safe="/")
 
 
-def build_karaoke_html(seg_dicts, audio_source) -> str:
+def build_karaoke_html(seg_dicts, audio_source, *, alt_source=None,
+                       primary_label="🎵 Audio", alt_label="🎤 Vocals") -> str:
     """Build the karaoke widget: an <audio> player + timestamped, clickable lyrics.
 
     `seg_dicts` is a list of plain dicts: {start, end, text, words:[{start,end,word}]}
     — the same shape whether the song was just made or is being reopened from the
-    library. `audio_source` is any audio file (it gets encoded once to a small ogg
-    the browser can stream). Word-level <span>s carry their own start/end so the JS
-    can light up each word as it's sung. Returns "" if there's no audio to embed.
+    library. `audio_source` is the track that plays by default (encoded once to a
+    small ogg the browser can stream). For songs we pass the INSTRUMENTAL here, so
+    it's a true karaoke — you supply the voice. If `alt_source` (the isolated
+    vocals) is given, a 🎤/🎹 toggle appears that flips between the two WITHOUT
+    losing your place, so you can peek at the melody and switch back. Word-level
+    <span>s carry their own start/end so the JS can light up each word as it's
+    sung. Returns "" if there's no audio to embed.
     """
     if not audio_source:
         return ""
@@ -328,6 +338,13 @@ def build_karaoke_html(seg_dicts, audio_source) -> str:
     if not audio_file:
         return ""
     src = _gradio_file_url(audio_file)
+
+    # The optional second track (e.g. the vocals guide), encoded the same way.
+    alt_url = ""
+    if alt_source:
+        alt_file = _karaoke_audio_file(alt_source)
+        if alt_file:
+            alt_url = _gradio_file_url(alt_file)
 
     uid = str(int(time.time() * 1000))
     lines = []
@@ -349,11 +366,26 @@ def build_karaoke_html(seg_dicts, audio_source) -> str:
         lines.append('<div class="kara-line" data-s="%.2f" data-e="%.2f">%s</div>' % (s, e, inner))
 
     body = "\n".join(lines) or '<div class="kara-line">(no lyrics detected)</div>'
+
+    # Both track URLs (and their button labels) ride along as data-* attributes so
+    # the JS toggle can swap audio.src instantly. The toggle button only appears
+    # when there's a second track to switch to.
+    data_attrs = 'data-primary="%s"' % src
+    toggle_btn = ""
+    if alt_url:
+        data_attrs += ' data-alt="%s" data-primary-label="%s" data-alt-label="%s"' % (
+            alt_url,
+            html.escape(primary_label, quote=True),
+            html.escape(alt_label, quote=True),
+        )
+        # Starting on the primary track, the button offers the OTHER one.
+        toggle_btn = '<button class="kara-toggle" type="button">%s</button>' % html.escape(alt_label)
+
     return (
-        '<div class="kara-root" id="kara-%s" data-wired="0">'
+        '<div class="kara-root" id="kara-%s" data-wired="0" %s>'
         '<div class="kara-bar">'
         '<span class="kara-title">🎤 Press play — words light up · click the waveform or a line to jump</span>'
-        '<button class="kara-fs" type="button">⛶ Fullscreen</button>'
+        '<span class="kara-bar-btns">%s<button class="kara-fs" type="button">⛶ Fullscreen</button></span>'
         '</div>'
         # The <audio> is now just the hidden "engine"; the custom player row below
         # (play button · clickable Audio Waveform · time readout) drives it via JS.
@@ -365,7 +397,79 @@ def build_karaoke_html(seg_dicts, audio_source) -> str:
         '</div>'
         '<div class="kara-lyrics">%s</div>'
         '</div>'
-    ) % (uid, src, body)
+    ) % (uid, data_attrs, toggle_btn, src, body)
+
+
+# Shown above a chord sheet when the detector found nothing usable.
+_CHORDS_EMPTY = (
+    '<div class="cs-empty">🎸 No chords detected for this track — the chord '
+    'finder works best on songs with clear guitar/piano backing.</div>'
+)
+
+
+def build_chord_sheet_html(sheet_model, transpose: int = 0, easy: bool = False) -> str:
+    """Render the lyrics-with-chords sheet, applying transpose / easy on the fly.
+
+    `sheet_model` is what chords.align_chords_to_lines produced, plus the key:
+        {"key": "Am", "lines": [ {"type":"lyric"/"chords", ...}, ... ]}
+    We never re-detect here — this is pure, instant text work — so the Transpose
+    slider and "Easy chords" toggle just re-call this function. `transpose` shifts
+    every chord by N semitones; `easy` first simplifies chords to plain triads and
+    then suggests a capo so you can play familiar open shapes.
+    """
+    if not sheet_model or not sheet_model.get("lines"):
+        return _CHORDS_EMPTY
+
+    key = sheet_model.get("key") or ""
+    # When you transpose, the key moves too — and that decides sharp vs flat
+    # spelling for everything on the page.
+    new_key = chords.transpose_chord(key, transpose) if key else ""
+    prefer_flats = chords.key_prefers_flats(new_key) if new_key else False
+
+    def disp(name: str) -> str:
+        """One chord name as it should appear, after easy + transpose."""
+        n = chords.simplify_chord(name) if easy else name
+        return chords.transpose_chord(n, transpose, prefer_flats)
+
+    rows = []
+    for ln in sheet_model["lines"]:
+        if ln["type"] == "chords":
+            label = ln.get("label") or ""
+            chips = "".join(
+                '<span class="cs-chord cs-inline">%s</span> ' % html.escape(disp(c))
+                for c in ln["chords"]
+            )
+            sect = '<span class="cs-section">%s</span> ' % html.escape(label) if label else ""
+            rows.append('<div class="cs-line cs-instr">%s%s</div>' % (sect, chips))
+        else:
+            units = ""
+            for chord, word in ln["cells"]:
+                w = html.escape((word or "").strip())
+                if not w:
+                    continue
+                c = html.escape(disp(chord)) if chord else ""
+                units += ('<span class="cs-unit"><span class="cs-chord">%s</span>'
+                          '<span class="cs-word">%s</span></span> ') % (c, w)
+            rows.append('<div class="cs-line">%s</div>' % (units or "&nbsp;"))
+
+    # Header: key, the transpose amount, and (in easy mode) a capo suggestion.
+    head_bits = []
+    if new_key:
+        head_bits.append('<span class="cs-key">Key: %s</span>' % html.escape(chords.key_long(new_key)))
+    if transpose:
+        head_bits.append('<span class="cs-tag">Transpose %+d</span>' % transpose)
+    if easy:
+        uniq = [disp(c) for c in chords.unique_chords(sheet_model["lines"])]
+        capo, shapes = chords.suggest_capo(uniq, prefer_flats)
+        play = " ".join(dict.fromkeys(shapes.values()))  # de-duped, in order
+        if capo > 0:
+            head_bits.append('<span class="cs-tag cs-capo">🎸 Capo %d → play: %s</span>'
+                             % (capo, html.escape(play)))
+        else:
+            head_bits.append('<span class="cs-tag cs-capo">🎸 No capo needed</span>')
+    header = '<div class="cs-head">%s</div>' % "".join(head_bits) if head_bits else ""
+
+    return '<div class="cs-root">%s<div class="cs-body">%s</div></div>' % (header, "\n".join(rows))
 
 
 # Shown in the results area if the audio couldn't be embedded for the player.
@@ -404,8 +508,13 @@ def _safe_slug(text: str) -> str:
 
 
 def _save_to_library(kind, title, out_stem, audio_source, seg_dicts, text,
-                     files, language="") -> str | None:
-    """Write one manifest describing a finished job. Returns its id (or None)."""
+                     files, language="", instrumental="", sheet=None) -> str | None:
+    """Write one manifest describing a finished job. Returns its id (or None).
+
+    `instrumental` (the karaoke backing track) and `sheet` (the detected chord
+    sheet) are saved too, so reopening a song from the library brings back its
+    instrumental karaoke + chords instantly — no Demucs, no re-detection.
+    """
     try:
         # If we'd previously auto-imported this same source as a "legacy" entry,
         # drop it now so the library never shows the same song twice.
@@ -428,9 +537,11 @@ def _save_to_library(kind, title, out_stem, audio_source, seg_dicts, text,
             "created_str": time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)),
             "language": language or "",
             "audio_source": str(audio_source) if audio_source else "",
+            "instrumental": str(instrumental) if instrumental else "",
             "text": text or "",
             "files": [str(f) for f in (files or [])],
             "segments": seg_dicts,
+            "sheet": sheet,
         }
         (LIBRARY_DIR / f"{item_id}.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -605,6 +716,30 @@ CUSTOM_CSS = """
 .kara-root:fullscreen .kara-line{font-size:30px}
 .kara-root:fullscreen .kara-line.on{font-size:42px}
 .kara-root:fullscreen .kara-wave{height:80px}
+
+/* the right-hand buttons in the karaoke title bar (vocals toggle + fullscreen) */
+.kara-bar-btns{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+.kara-toggle{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#5a3a00;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
+.kara-toggle:hover{background:#7a5210}
+
+/* ---- guitar chord sheet (lyrics with chords above the words) ------------- */
+.cs-root{border:1px solid rgba(130,130,170,.28);border-radius:16px;padding:16px 18px;background:rgba(130,130,170,.05)}
+.cs-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(130,130,170,.2)}
+.cs-key{font-size:15px;font-weight:700}
+.cs-tag{font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(130,130,170,.16)}
+.cs-capo{background:rgba(179,0,90,.12);color:#b3005a}
+/* big line spacing leaves room for a chord sitting above each word */
+.cs-body{font-size:17px;line-height:2.6}
+.cs-line{margin:2px 0}
+.cs-instr{opacity:.85;margin:9px 0}
+.cs-section{font-style:italic;opacity:.7;font-size:13px;margin-right:4px}
+/* each word + its (optional) chord is one bottom-aligned stack, so the lyrics
+   line up no matter which words carry a chord */
+.cs-unit{display:inline-block;vertical-align:bottom}
+.cs-chord{display:block;height:1.25em;line-height:1.25;font-weight:800;color:#b3005a;font-size:.8em;white-space:pre}
+.cs-word{white-space:pre}
+.cs-chord.cs-inline{display:inline-block;height:auto;margin-right:6px;font-size:.95em}
+.cs-empty{padding:16px;border:1px dashed rgba(130,130,170,.5);border-radius:14px;opacity:.85;font-size:14px}
 """
 
 
@@ -661,6 +796,29 @@ INIT_JS = r"""
         } else {
           document.exitFullscreen();
         }
+      });
+    }
+
+    // ---- vocals / instrumental toggle ---------------------------------------
+    // Swap the <audio> source between the two tracks (e.g. instrumental <-> the
+    // vocals guide) WITHOUT losing your place: remember the time + whether it was
+    // playing, switch src, then restore. The waveform is rebuilt for the new one.
+    const toggleBtn = root.querySelector('.kara-toggle');
+    if (toggleBtn && audio && root.dataset.alt) {
+      let onPrimary = true;
+      toggleBtn.addEventListener('click', function () {
+        const t = audio.currentTime, playing = !audio.paused;
+        onPrimary = !onPrimary;
+        audio.src = onPrimary ? root.dataset.primary : root.dataset.alt;
+        audio.addEventListener('loadedmetadata', function once() {
+          audio.removeEventListener('loadedmetadata', once);
+          try { audio.currentTime = t; } catch (e) {}
+          if (playing) audio.play();
+          buildWave();
+        });
+        audio.load();
+        // the button always advertises the OTHER track you can switch to
+        toggleBtn.textContent = onPrimary ? root.dataset.altLabel : root.dataset.primaryLabel;
       });
     }
 
@@ -874,7 +1032,7 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
 
     def _work():
         try:
-            holder["v"] = separate_vocals(Path(audio_path), demucs_model, float(max_seconds or 0))
+            holder["s"] = separate_stems(Path(audio_path), demucs_model, float(max_seconds or 0))
         except Exception as exc:
             holder["e"] = exc
 
@@ -892,7 +1050,8 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
         th.join(timeout=0.8)
     if "e" in holder:
         raise gr.Error(f"Vocal separation failed: {holder['e']}")
-    vocals = holder["v"]
+    stems = holder["s"]
+    vocals = stems.vocals
 
     # Same here: the lyrics model can be a big first-time download, so stream a
     # live counter while it loads instead of freezing the bar at one spot.
@@ -925,15 +1084,33 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
     written = core.write_all(result, OUTPUT_DIR, f"{Path(audio_path).stem}.lyrics",
                              ("txt", "srt", "json"))
     seg_dicts = _seg_dicts(result)
-    kara = build_karaoke_html(seg_dicts, vocals)
+
+    # Work out the guitar chords from the INSTRUMENTAL (quick next to Demucs) and
+    # lay them above the words. A chord hiccup must never sink the whole result.
+    yield {"percent": 0.98, "label": "Working out the chords…", "sub": "almost done"}
+    try:
+        chord_data = chords.detect_chords(stems.instrumental, float(max_seconds or 0))
+    except Exception as exc:
+        print(f"[chords] detection failed ({exc}); skipping the chord sheet.")
+        chord_data = {"key": "", "spans": []}
+    sheet_model = {"key": chord_data["key"],
+                   "lines": chords.align_chords_to_lines(seg_dicts, chord_data["spans"])}
+    chord_html = build_chord_sheet_html(sheet_model)
+
+    # Karaoke plays the INSTRUMENTAL (true karaoke); the toggle reveals the vocals.
+    kara = build_karaoke_html(seg_dicts, stems.instrumental, alt_source=vocals,
+                              primary_label="🎹 Instrumental", alt_label="🎤 Vocals guide")
     _save_to_library("song", title or Path(audio_path).stem, Path(audio_path).stem,
                      vocals, seg_dicts, result.text, written,
-                     info.language if info else "")
+                     info.language if info else "",
+                     instrumental=stems.instrumental, sheet=sheet_model)
     yield {"done": True,
            "text": result.text,
            "rows": [_row(s) for s in segments],
            "files": [str(p) for p in written],
            "kara": kara,
+           "chords": chord_html,
+           "sheet": sheet_model,
            "vocals": str(vocals),
            "summary": f"### ✅ Lyrics ready\n{len(segments)} lines · {result.elapsed:.0f}s (＋ separation time)"}
 
@@ -941,12 +1118,17 @@ def _process_lyrics(audio_path, whisper_model, demucs_model, language,
 # --------------------------------------------------------------------------- #
 # UI plumbing: drive an engine generator and route its events to components
 # --------------------------------------------------------------------------- #
-def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara, vocals=None):
+def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara,
+          vocals=None, chord_box=None, sheet=None, tr=None, easy=None):
     """Run `gen` and send each event to the right Gradio component.
 
     While it works, ONLY the progress bar (`pbar`) changes — that's why nothing
     flickers any more. When the engine signals "done", we hide the progress
     screen, reveal the results screen, and fill everything in at once.
+
+    `chord_box`/`sheet`/`tr`/`easy` are the optional chord-sheet bits (songs
+    only): the rendered sheet, the State that backs the transpose/easy buttons,
+    and the two controls — which we reset to 0 / off for each fresh result.
     """
     for ev in gen:
         if ev.get("done"):
@@ -961,6 +1143,14 @@ def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara, voc
             }
             if vocals is not None:
                 out[vocals] = ev.get("vocals")
+            if chord_box is not None:
+                out[chord_box] = ev.get("chords") or _CHORDS_EMPTY
+            if sheet is not None:
+                out[sheet] = ev.get("sheet")
+            if tr is not None:
+                out[tr] = gr.update(value=0)
+            if easy is not None:
+                out[easy] = gr.update(value=False)
             yield out
         else:
             yield {pbar: progress_html(ev["percent"], ev["label"], ev.get("sub", ""))}
@@ -969,6 +1159,18 @@ def _pump(gen, *, progress, results, pbar, summary, text, segs, files, kara, voc
 def _go_setup():
     """Send the user back to the setup screen (used by the 'start over' buttons)."""
     return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+
+
+def _render_sheet(sheet_model, transpose, easy):
+    """Redraw the chord sheet for the current transpose / easy settings.
+
+    Wired to the Transpose slider + Easy checkbox. If there's no sheet (e.g. a
+    speech item, or chords weren't detected) we leave whatever's shown untouched
+    rather than blanking it.
+    """
+    if not sheet_model:
+        return gr.update()
+    return build_chord_sheet_html(sheet_model, int(transpose), bool(easy))
 
 
 # --------------------------------------------------------------------------- #
@@ -1088,6 +1290,14 @@ def build_ui() -> gr.Blocks:
                     ly_back = gr.Button("⬅ New song", size="sm")
                 with gr.Accordion("🎤 Karaoke player", open=True):
                     ly_kara = gr.HTML()
+                with gr.Accordion("🎸 Guitar chords", open=True):
+                    with gr.Row():
+                        ly_transpose = gr.Slider(-6, 6, value=0, step=1,
+                                                 label="Transpose — move the chords up / down (semitones)")
+                        ly_easy = gr.Checkbox(value=False,
+                                              label="Easy chords (simplify + suggest a capo)")
+                    ly_chords = gr.HTML()
+                    ly_sheet = gr.State()  # holds the chord data the buttons re-render
                 ly_text = gr.Textbox(label="Lyrics", lines=10)
                 with gr.Accordion("Lines, isolated vocals & downloads", open=False):
                     ly_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
@@ -1105,16 +1315,21 @@ def build_ui() -> gr.Blocks:
                 gen = _process_lyrics(audio, whisper_model, demucs_model, language, max_seconds, vad, threads)
                 yield from _pump(gen, progress=ly_progress, results=ly_results, pbar=ly_pbar,
                                  summary=ly_summary, text=ly_text, segs=ly_segs, files=ly_files,
-                                 kara=ly_kara, vocals=ly_vocals)
+                                 kara=ly_kara, vocals=ly_vocals,
+                                 chord_box=ly_chords, sheet=ly_sheet, tr=ly_transpose, easy=ly_easy)
 
             ly_btn.click(
                 ui_lyrics,
                 inputs=[ly_audio, ly_model, ly_demucs, ly_lang, ly_max, ly_vad, ly_threads],
                 outputs=[ly_setup, ly_progress, ly_results, ly_pbar, ly_summary, ly_text,
-                         ly_segs, ly_files, ly_kara, ly_vocals],
+                         ly_segs, ly_files, ly_kara, ly_vocals,
+                         ly_chords, ly_sheet, ly_transpose, ly_easy],
                 show_progress="hidden",
             )
             ly_back.click(_go_setup, outputs=[ly_setup, ly_progress, ly_results])
+            # Transpose / Easy just re-draw the (already detected) chords — instant.
+            ly_transpose.change(_render_sheet, inputs=[ly_sheet, ly_transpose, ly_easy], outputs=[ly_chords])
+            ly_easy.change(_render_sheet, inputs=[ly_sheet, ly_transpose, ly_easy], outputs=[ly_chords])
 
         # ================= TAB 3: From a link (YouTube) ================= #
         with gr.Tab("▶️ From a link (YouTube)"):
@@ -1151,6 +1366,14 @@ def build_ui() -> gr.Blocks:
                     yt_back = gr.Button("⬅ New link", size="sm")
                 with gr.Accordion("🎤 Karaoke player", open=True):
                     yt_kara = gr.HTML()
+                with gr.Accordion("🎸 Guitar chords (songs)", open=True):
+                    with gr.Row():
+                        yt_transpose = gr.Slider(-6, 6, value=0, step=1,
+                                                 label="Transpose — move the chords up / down (semitones)")
+                        yt_easy = gr.Checkbox(value=False,
+                                              label="Easy chords (simplify + suggest a capo)")
+                    yt_chords = gr.HTML()
+                    yt_sheet = gr.State()
                 yt_text = gr.Textbox(label="Result", lines=10)
                 with gr.Accordion("Segments, isolated vocals & downloads", open=False):
                     yt_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
@@ -1166,6 +1389,7 @@ def build_ui() -> gr.Blocks:
                        yt_results: gr.update(visible=False),
                        yt_title: "",
                        yt_vocals: None,
+                       yt_chords: "",  # clear any chords from a previous run
                        yt_pbar: progress_html(0.0, "Downloading audio from the link…", "Needs internet.")}
                 try:
                     audio, title = download_audio(url.strip(), INPUT_DIR)
@@ -1180,7 +1404,8 @@ def build_ui() -> gr.Blocks:
                                           max_seconds, vad, threads, title=title)
                     yield from _pump(gen, progress=yt_progress, results=yt_results, pbar=yt_pbar,
                                      summary=yt_summary, text=yt_text, segs=yt_segs, files=yt_files,
-                                     kara=yt_kara, vocals=yt_vocals)
+                                     kara=yt_kara, vocals=yt_vocals,
+                                     chord_box=yt_chords, sheet=yt_sheet, tr=yt_transpose, easy=yt_easy)
                 else:
                     gen = _process_speech(str(audio), model_name, language, task, 5, vad, True, None,
                                           threads, title=title)
@@ -1191,10 +1416,13 @@ def build_ui() -> gr.Blocks:
                 ui_youtube,
                 inputs=[yt_url, yt_mode, yt_model, yt_demucs, yt_lang, yt_task, yt_max, yt_vad, yt_threads],
                 outputs=[yt_setup, yt_progress, yt_results, yt_pbar, yt_title, yt_summary, yt_text,
-                         yt_segs, yt_files, yt_kara, yt_vocals],
+                         yt_segs, yt_files, yt_kara, yt_vocals,
+                         yt_chords, yt_sheet, yt_transpose, yt_easy],
                 show_progress="hidden",
             )
             yt_back.click(_go_setup, outputs=[yt_setup, yt_progress, yt_results])
+            yt_transpose.change(_render_sheet, inputs=[yt_sheet, yt_transpose, yt_easy], outputs=[yt_chords])
+            yt_easy.change(_render_sheet, inputs=[yt_sheet, yt_transpose, yt_easy], outputs=[yt_chords])
 
         # ================= TAB 4: My library =========================== #
         with gr.Tab("📂 My library") as lib_tab:
@@ -1217,6 +1445,14 @@ def build_ui() -> gr.Blocks:
                 lib_title = gr.Markdown()
                 with gr.Accordion("🎤 Karaoke player", open=True):
                     lib_kara = gr.HTML()
+                with gr.Accordion("🎸 Guitar chords", open=True):
+                    with gr.Row():
+                        lib_transpose = gr.Slider(-6, 6, value=0, step=1,
+                                                  label="Transpose — move the chords up / down (semitones)")
+                        lib_easy = gr.Checkbox(value=False,
+                                               label="Easy chords (simplify + suggest a capo)")
+                    lib_chords = gr.HTML()
+                    lib_sheet = gr.State()
                 lib_text = gr.Textbox(label="Text", lines=10)
                 with gr.Accordion("Lines & downloads", open=False):
                     lib_segs = gr.Dataframe(headers=SEGMENT_HEADERS, wrap=True,
@@ -1228,12 +1464,24 @@ def build_ui() -> gr.Blocks:
                 return gr.update(choices=_scan_library())
 
             def _open_library(item_id):
-                """Rebuild a saved job's karaoke + transcript from its manifest."""
+                """Rebuild a saved job's karaoke + chords + transcript from its manifest."""
                 if not item_id:
                     raise gr.Error("Pick a saved item from the list first.")
                 m = _load_manifest(item_id)
                 seg_dicts = m.get("segments") or []
-                kara = build_karaoke_html(seg_dicts, m.get("audio_source")) or _KARA_EMPTY
+                # Songs play the instrumental with a vocals-guide toggle; older saves
+                # (and speech) only have one track, so fall back to that.
+                instrumental = m.get("instrumental") or ""
+                vocals = m.get("audio_source") or ""
+                if m.get("kind") == "song" and instrumental:
+                    kara = build_karaoke_html(seg_dicts, instrumental, alt_source=vocals,
+                                              primary_label="🎹 Instrumental",
+                                              alt_label="🎤 Vocals guide") or _KARA_EMPTY
+                else:
+                    kara = build_karaoke_html(seg_dicts, vocals) or _KARA_EMPTY
+                # Chords come straight from the saved sheet (older saves have none).
+                sheet_model = m.get("sheet")
+                chord_html = build_chord_sheet_html(sheet_model) if sheet_model else _CHORDS_EMPTY
                 rows = [[core._ts(s.get("start") or 0.0), core._ts(s.get("end") or 0.0),
                          (s.get("text") or "").strip()] for s in seg_dicts]
                 files = [f for f in (m.get("files") or []) if Path(f).exists()]
@@ -1241,12 +1489,17 @@ def build_ui() -> gr.Blocks:
                 title_md = f"### {icon} {m.get('title', '(untitled)')}\n*saved {m.get('created_str', '')}*"
                 return {lib_results: gr.update(visible=True),
                         lib_title: title_md, lib_kara: kara, lib_text: m.get("text", ""),
-                        lib_segs: rows, lib_files: files}
+                        lib_segs: rows, lib_files: files,
+                        lib_chords: chord_html, lib_sheet: sheet_model,
+                        lib_transpose: gr.update(value=0), lib_easy: gr.update(value=False)}
 
             lib_refresh.click(_refresh_library, outputs=[lib_pick])
             lib_tab.select(_refresh_library, outputs=[lib_pick])  # auto-refresh on open
             lib_open.click(_open_library, inputs=[lib_pick],
-                           outputs=[lib_results, lib_title, lib_kara, lib_text, lib_segs, lib_files])
+                           outputs=[lib_results, lib_title, lib_kara, lib_text, lib_segs, lib_files,
+                                    lib_chords, lib_sheet, lib_transpose, lib_easy])
+            lib_transpose.change(_render_sheet, inputs=[lib_sheet, lib_transpose, lib_easy], outputs=[lib_chords])
+            lib_easy.change(_render_sheet, inputs=[lib_sheet, lib_transpose, lib_easy], outputs=[lib_chords])
 
         gr.Markdown("---\nResults are also saved to the **output/** folder. "
                     "Everything runs locally; the only step that needs internet is "

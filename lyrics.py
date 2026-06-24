@@ -29,6 +29,7 @@ so expect good-but-not-perfect results.
 import argparse
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import whisper_core as core
@@ -75,8 +76,28 @@ def _load_audio_tensor(path: Path, target_sr: int, target_channels: int):
     return wav
 
 
-def separate_vocals(audio: Path, model_name: str = "htdemucs", max_seconds: float = 0) -> Path:
-    """Isolate the vocal stem using the Demucs Python API. Returns vocals.wav.
+@dataclass
+class Stems:
+    """The two parts of a song we keep — both on the SAME timeline as the original.
+
+    vocals       — just the singing, isolated. This is what Whisper reads to get
+                   the lyrics (and what powers the "vocals guide" in karaoke).
+    instrumental — everything EXCEPT the singing (drums + bass + other). This is
+                   the karaoke backing track you sing over, and also what the
+                   chord detector listens to (no voice melody to confuse it).
+    """
+    vocals: Path
+    instrumental: Path
+
+
+def separate_stems(audio: Path, model_name: str = "htdemucs", max_seconds: float = 0) -> Stems:
+    """Split a song into vocals + instrumental with Demucs. Returns BOTH paths.
+
+    Demucs actually predicts FOUR parts (drums, bass, other, vocals) in a single
+    pass. We've always kept the isolated `vocals`; here we ALSO build the
+    `instrumental` = the whole song minus the vocals (i.e. drums+bass+other) and
+    save it as no_vocals.wav. Because both come out of the *same* separation, the
+    instrumental costs no extra processing time — it was being thrown away before.
 
     We call apply_model() on an audio tensor we load ourselves, which avoids the
     Demucs CLI's dependency on torchcodec/ffmpeg.
@@ -89,6 +110,7 @@ def separate_vocals(audio: Path, model_name: str = "htdemucs", max_seconds: floa
     out_dir = SEP_DIR / model_name / audio.stem
     out_dir.mkdir(parents=True, exist_ok=True)
     vocals_path = out_dir / "vocals.wav"
+    instrumental_path = out_dir / "no_vocals.wav"
 
     print(f"[separate] loading Demucs model '{model_name}' ...")
     model = get_model(model_name)
@@ -115,9 +137,24 @@ def separate_vocals(audio: Path, model_name: str = "htdemucs", max_seconds: floa
     sources = sources * std + mean
 
     vocals = sources[model.sources.index("vocals")]  # (channels, samples)
+    # The instrumental is simply "all the parts added back together, minus the
+    # voice" — which is exactly the original song with the singer removed.
+    instrumental = sources.sum(0) - vocals           # (channels, samples)
     sf.write(str(vocals_path), vocals.t().numpy(), model.samplerate)
+    sf.write(str(instrumental_path), instrumental.t().numpy(), model.samplerate)
     print(f"[separate] done in {time.time() - t0:.1f}s -> {vocals_path}")
-    return vocals_path
+    print(f"[separate] karaoke backing track       -> {instrumental_path}")
+    return Stems(vocals=vocals_path, instrumental=instrumental_path)
+
+
+def separate_vocals(audio: Path, model_name: str = "htdemucs", max_seconds: float = 0) -> Path:
+    """Isolate just the vocal stem (used by the command-line `lyrics` tool).
+
+    A thin wrapper around separate_stems() so older callers that only want the
+    vocals path keep working unchanged. As a bonus it now also leaves a
+    no_vocals.wav karaoke track sitting next to the vocals, for free.
+    """
+    return separate_stems(audio, model_name, max_seconds).vocals
 
 
 def build_parser() -> argparse.ArgumentParser:
