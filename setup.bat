@@ -53,12 +53,16 @@ echo This is the long step - it downloads a few hundred MB. Please wait.
 REM --- 5) Download the AI models ---
 echo.
 echo Downloading AI models (about 1.8 GB - one time)...
-"%VPY%" download_models.py
+"%VPY%" tools\download_models.py
+
+echo.
+echo Creating the Sonari app icon (a desktop shortcut)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\make_shortcut.ps1"
 
 echo.
 echo ============================================================
-echo   DONE!  Now try:
-echo       transcribe input\jfk.flac --model base
-echo       lyrics "input\your-song.mp3"
+echo   DONE!  Double-click  Sonari  (or app.bat) to open the app, or try:
+echo       tools\transcribe input\jfk.flac --model base
+echo       tools\lyrics "input\your-song.mp3"
 echo ============================================================
 pause

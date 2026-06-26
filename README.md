@@ -19,6 +19,8 @@ no internet.
 - 🖥️ **Visual app** — a simple browser UI (`app.py`) with model/option pickers; the command line still works too
 - ▶️ **From a link** — paste a YouTube URL and Sonari fetches the audio, then transcribes it
 - 🎤 **Karaoke & chords** — sing along to the **instrumental** (vocals removed) with the words lighting up in time, plus an auto-detected **guitar-chord sheet** you can transpose up/down or switch to **easy** chords with a suggested capo — all offline
+- 📖 **Built-in guide** — a friendly in-app **📖 Guide** tab explains every feature, step by step
+- 🖥️ **One-click icon** — setup drops a **Sonari** shortcut (with a custom app icon) on your Desktop
 
 ---
 
@@ -52,27 +54,27 @@ models (~1.8 GB, one time).
 ### 3. Use it
 **Speech → text:**
 ```bash
-transcribe input\jfk.flac        # Windows
-./transcribe.sh input/jfk.flac   # macOS / Linux
+tools\transcribe input\jfk.flac        # Windows
+./tools/transcribe.sh input/jfk.flac   # macOS / Linux
 ```
 **Song → lyrics:**
 ```bash
-lyrics "input\song.mp3"          # Windows
-./lyrics.sh "input/song.mp3"     # macOS / Linux
+tools\lyrics "input\song.mp3"          # Windows
+./tools/lyrics.sh "input/song.mp3"     # macOS / Linux
 ```
 
 **Prefer buttons? Launch the visual app:**
 ```bash
-app             # Windows (or just double-click app.bat)
+app             # Windows — or just double-click the Sonari icon (or app.bat)
 ./app.sh        # macOS / Linux
 ```
-It opens in your browser with tabs for **speech**, **lyrics**, and **YouTube links** —
-pick a file, choose a model, and watch the text appear as it transcribes.
+It opens in your browser with tabs for **speech**, **lyrics**, **YouTube links**, your
+**library**, and a **📖 Guide** that walks you through everything.
 
 **Straight from a link** (works in the app *or* the terminal):
 ```bash
-lyrics --url "https://www.youtube.com/watch?v=..."        # song → lyrics
-transcribe --url "https://www.youtube.com/watch?v=..."    # talk → text
+tools\lyrics --url "https://www.youtube.com/watch?v=..."        # song → lyrics
+tools\transcribe --url "https://www.youtube.com/watch?v=..."    # talk → text
 ```
 
 Your results appear in the **`output/`** folder.
@@ -90,7 +92,7 @@ Your results appear in the **`output/`** folder.
 --max-seconds 30         (lyrics) process only the first 30s — handy for a quick test
 --demucs-model htdemucs_ft   (lyrics) slower but cleaner vocal separation
 ```
-Full help: `transcribe --help` / `lyrics --help`.
+Full help: `tools\transcribe --help` / `tools\lyrics --help`.
 
 ---
 
@@ -114,6 +116,21 @@ computer has an **NVIDIA GPU**, Sonari uses it automatically and is far faster.
 Whisper is already excellent, but you can fine-tune it for **your** voice, accent,
 language, or vocabulary. See [`training/`](training/) for a ready-to-run LoRA
 script and a step-by-step guide using free cloud GPUs (Google Colab / Kaggle).
+
+## 📁 What's in the folder
+
+```
+Sonari/
+├─ app.py                     the visual app  (run via the Sonari icon · app.bat · app.sh)
+├─ whisper_core.py            the speech-to-text engine
+├─ lyrics.py chords.py media.py   vocal separation · chord detection · link downloads
+├─ setup.bat / setup.sh       one-click installer
+├─ assets/                    the app icon (sonari.ico / sonari.png)
+├─ tools/                     command-line extras — transcribe, lyrics,
+│                               download_models, make_icon, make_shortcut
+├─ input/  output/            your audio in · your text + saved library out
+└─ training/                  optional fine-tuning scripts
+```
 
 ## 🛠️ Troubleshooting
 

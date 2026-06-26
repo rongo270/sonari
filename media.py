@@ -4,9 +4,9 @@ media.py  -  Download audio from a link (YouTube, etc.)
 
 Thin wrapper around yt-dlp so the rest of Sonari can accept an online link in
 addition to local files. Used by:
-  - app.py        (the "YouTube -> lyrics" tab)
-  - transcribe.py (--url)
-  - lyrics.py     (--url)
+  - app.py            (the "YouTube -> lyrics" tab)
+  - tools/transcribe.py (--url)
+  - lyrics.py         (--url)
 
 It downloads the best available audio track. If ffmpeg is installed it converts
 to a clean .mp3; if not, it keeps the native track (.m4a/.webm/.opus) which the

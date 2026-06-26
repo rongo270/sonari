@@ -3,8 +3,8 @@
 download_models.py - fetch everything the tools need (run once on a new machine).
 
 setup.bat / setup.sh call this automatically. You can also run it yourself:
-    python download_models.py              # turbo + base + demucs + test clip
-    python download_models.py --skip-turbo # lighter setup (skip the 1.6 GB model)
+    python tools/download_models.py              # turbo + base + demucs + test clip
+    python tools/download_models.py --skip-turbo # lighter setup (skip the 1.6 GB model)
 
 Everything is cached inside ./models. Re-running is safe — already-downloaded
 files are skipped.
@@ -14,7 +14,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parent.parent  # tools/ -> project root
 MODELS = PROJECT / "models"
 INPUT = PROJECT / "input"
 MODELS.mkdir(exist_ok=True)
@@ -65,7 +65,7 @@ def main() -> None:
     download_demucs("htdemucs")             # music -> isolated vocals
     download_sample()
     print("\nAll set. Test it with:")
-    print("    python transcribe.py input/jfk.flac --model base")
+    print("    python tools/transcribe.py input/jfk.flac --model base")
 
 
 if __name__ == "__main__":

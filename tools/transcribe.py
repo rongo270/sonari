@@ -8,20 +8,21 @@ into accurate text using faster-whisper with the large-v3 model.
 
 EXAMPLES
 --------
+  # (run these from the project root)
   # one file (uses the best model, auto language detection)
-  python transcribe.py input/jfk.flac
+  python tools/transcribe.py input/jfk.flac
 
   # a file anywhere on disk
-  python transcribe.py "C:/Users/rongo/Desktop/meeting.mp3"
+  python tools/transcribe.py "C:/Users/rongo/Desktop/meeting.mp3"
 
   # force English, faster model (good when the laptop is slow)
-  python transcribe.py input/talk.m4a --model large-v3-turbo --language en
+  python tools/transcribe.py input/talk.m4a --model large-v3-turbo --language en
 
   # transcribe every audio file in a folder
-  python transcribe.py input/
+  python tools/transcribe.py input/
 
   # translate any language INTO English text
-  python transcribe.py input/spanish.mp3 --task translate
+  python tools/transcribe.py input/spanish.mp3 --task translate
 
 MODELS (accuracy vs speed on CPU)
 ---------------------------------
@@ -35,9 +36,14 @@ import sys
 import time
 from pathlib import Path
 
+# This CLI now lives in tools/; add the project root (one level up) to the import
+# path so `import whisper_core` / `media` — which sit in the root — still resolve,
+# and so input/ · output/ · models/ keep pointing at the project root, not tools/.
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
+
 import whisper_core as core
 
-PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_OUT = PROJECT_DIR / "output"
 
 AUDIO_EXTS = {

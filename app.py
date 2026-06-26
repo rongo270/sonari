@@ -1070,6 +1070,278 @@ button.res-back:hover{background:var(--amber-d)!important}
 .guide-pillrow{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 4px}
 .guide-pill{font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;background:var(--amber-d);color:var(--amber);border:1px solid rgba(217,119,6,.25)}
 .guide-foot{margin:24px 0 6px;text-align:center;color:var(--dim);font-size:13px}
+
+/* ===========================================================
+   ENHANCED UI — Animations & Micro-interactions (v2)
+   =========================================================== */
+
+/* ---- Colour scheme: purple ---- */
+:root{
+  --amber:#7c3aed;
+  --amber-d:rgba(124,58,237,.1);
+  --amber-g:rgba(124,58,237,.2);
+}
+
+/* ---- Karaoke player: purple stage ---- */
+.kara-root{
+  --kara-up:#ede9fe;
+  --kara-sung:#7c3aed;
+  border:1px solid #7c3aed!important;
+  background:radial-gradient(110% 130% at 50% -10%,#f5f0ff 0%,#7c3aed 52%,#4c1d95 100%)!important;
+  box-shadow:0 0 0 4px rgba(124,58,237,.12),0 12px 40px rgba(0,0,0,.16)!important;
+}
+.kara-title{color:#c4b5fd!important}
+.kara-fs,.kara-toggle{background:#4c1d95!important;color:#ede9fe!important}
+.kara-fs:hover,.kara-toggle:hover{background:#5b21b6!important}
+.kara-play{background:#4c1d95!important;box-shadow:0 4px 12px rgba(76,29,149,.4)!important}
+.kara-play:hover{background:#5b21b6!important}
+.kara-time{color:#c4b5fd!important}
+.kara-line:hover{background:rgba(124,58,237,.1)!important}
+.kara-line.on{
+  color:#fff!important;
+  background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.05))!important;
+  box-shadow:inset 3px 0 0 #a78bfa,0 3px 14px rgba(124,58,237,.22)!important;
+}
+.kara-line.on .kara-w:not(.on):not(.sung){color:#fff!important}
+.kara-line.sung{color:#7c3aed!important;opacity:.5!important}
+.kara-w.on{
+  background:linear-gradient(180deg,#a78bfa,#7c3aed)!important;
+  color:#fff!important;
+  box-shadow:0 2px 10px rgba(124,58,237,.5)!important;
+}
+.kara-w.sung{color:#a78bfa!important}
+.kara-empty{border-color:rgba(124,58,237,.3)!important;color:#c4b5fd!important}
+.kara-root:fullscreen{background:radial-gradient(100% 110% at 50% 25%,#f5f0ff,#7c3aed)!important}
+
+/* ---- Hard-coded amber stragglers → purple ---- */
+.accordion.open{border-color:rgba(124,58,237,.2)!important}
+button.secondary,button.sm{border-color:rgba(124,58,237,.3)!important}
+button.secondary:hover,button.sm:hover{border-color:rgba(124,58,237,.5)!important}
+button.res-back{border-color:rgba(124,58,237,.3)!important}
+.cs-capo{border-color:rgba(124,58,237,.3)!important}
+.cs-empty{border-color:rgba(124,58,237,.2)!important}
+.guide-card h3 .tag{border-color:rgba(124,58,237,.25)!important}
+.callout.note{border-color:rgba(124,58,237,.25)!important;color:#3b0764!important}
+.callout.warn{border-color:rgba(124,58,237,.2)!important;color:#4c1d95!important}
+.guide-pill{border-color:rgba(124,58,237,.25)!important}
+.src-toggle .wrap label:has(input[type=radio]:checked){
+  box-shadow:0 1px 6px rgba(0,0,0,.1),0 0 0 1px rgba(124,58,237,.2)!important;
+}
+
+/* ---- Minimal hero bar ---- */
+.hero-bar{
+  display:flex;align-items:center;gap:12px;
+  padding:13px 18px;margin:4px 0 14px;
+  background:var(--s0);
+  border:1px solid var(--line);
+  border-radius:14px;
+  box-shadow:0 1px 4px rgba(0,0,0,.05);
+}
+.hero-bar-logo{
+  flex:0 0 auto;width:34px;height:34px;border-radius:9px;
+  background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 3px 10px rgba(124,58,237,.3);
+  animation:logo-breathe 4s ease-in-out infinite;
+}
+.hero-bar-logo .logo-wave{width:20px;height:20px;fill:#ffffff!important}
+.hero-bar-logo:hover .logo-wave rect{
+  transform-box:fill-box;transform-origin:center bottom;
+  animation:bar-wave 1.2s ease-in-out infinite;
+}
+.hero-bar-logo:hover .logo-wave rect:nth-child(1){animation-delay:0s}
+.hero-bar-logo:hover .logo-wave rect:nth-child(2){animation-delay:.1s}
+.hero-bar-logo:hover .logo-wave rect:nth-child(3){animation-delay:.2s}
+.hero-bar-logo:hover .logo-wave rect:nth-child(4){animation-delay:.05s}
+.hero-bar-logo:hover .logo-wave rect:nth-child(5){animation-delay:.25s}
+.hero-bar-logo:hover .logo-wave rect:nth-child(6){animation-delay:.15s}
+.hero-bar-logo:hover .logo-wave rect:nth-child(7){animation-delay:.3s}
+.hero-bar-name{font-size:19px;font-weight:800;letter-spacing:-.3px;color:var(--text)}
+
+/* ---- Keyframes ---- */
+@keyframes shimmer-slide{
+  0%{background-position:-600px center}
+  100%{background-position:600px center}
+}
+@keyframes logo-breathe{
+  0%,100%{box-shadow:0 6px 20px rgba(124,58,237,.22)}
+  50%{box-shadow:0 8px 36px rgba(124,58,237,.55),0 0 20px rgba(124,58,237,.18)}
+}
+@keyframes hero-drift{
+  0%,100%{opacity:.09;transform:scale(1)}
+  50%{opacity:.18;transform:scale(1.1)}
+}
+@keyframes success-pop{
+  0%{opacity:.6;transform:scale(.97)}
+  100%{opacity:1;transform:scale(1)}
+}
+@keyframes bar-wave{
+  0%,100%{transform:scaleY(1)}
+  50%{transform:scaleY(.45)}
+}
+
+/* ---- Progress bar: shimmer while loading ---- */
+.pbar-card:not(.pbar-done) .pbar-fill{
+  background:linear-gradient(
+    90deg,
+    #5b21b6 0%,#7c3aed 30%,#a78bfa 50%,#7c3aed 70%,#5b21b6 100%
+  )!important;
+  background-size:600px 100%!important;
+  animation:shimmer-slide 2s linear infinite!important;
+  transition:width .4s ease!important;
+}
+
+/* ---- Progress bar: green success when done ---- */
+.pbar-card.pbar-done{
+  border-color:rgba(16,185,129,.28)!important;
+  background:linear-gradient(135deg,rgba(16,185,129,.05) 0%,var(--s0) 55%)!important;
+  animation:success-pop .4s ease both!important;
+}
+.pbar-card.pbar-done .pbar-fill{
+  background:linear-gradient(90deg,#059669,#10b981 50%,#34d399)!important;
+  animation:none!important;
+  box-shadow:0 0 12px rgba(16,185,129,.4)!important;
+}
+.pbar-card.pbar-done .pbar-pct{color:#059669!important}
+.pbar-card.pbar-done .pbar-label{color:#064e3b!important;font-weight:800!important}
+
+/* ---- Hero: logo gradient + breathing glow ---- */
+.hero-logo{
+  background:linear-gradient(135deg,#d97706 0%,#b45309 100%)!important;
+  animation:logo-breathe 4s ease-in-out infinite!important;
+}
+
+/* ---- Hero: waveform bars animate on hover ---- */
+.hero-logo:hover .logo-wave rect{
+  transform-box:fill-box;
+  transform-origin:center bottom;
+  animation:bar-wave 1.2s ease-in-out infinite;
+}
+.hero-logo:hover .logo-wave rect:nth-child(1){animation-delay:0s}
+.hero-logo:hover .logo-wave rect:nth-child(2){animation-delay:.1s}
+.hero-logo:hover .logo-wave rect:nth-child(3){animation-delay:.2s}
+.hero-logo:hover .logo-wave rect:nth-child(4){animation-delay:.05s}
+.hero-logo:hover .logo-wave rect:nth-child(5){animation-delay:.25s}
+.hero-logo:hover .logo-wave rect:nth-child(6){animation-delay:.15s}
+.hero-logo:hover .logo-wave rect:nth-child(7){animation-delay:.3s}
+
+/* ---- Hero: ambient accent orbs ---- */
+.hero::before{animation:hero-drift 8s ease-in-out infinite!important}
+.hero::after{
+  content:'';
+  position:absolute;
+  bottom:-50px;left:-30px;
+  width:200px;height:160px;
+  background:radial-gradient(circle,rgba(217,119,6,.05),transparent 70%);
+  pointer-events:none;
+}
+
+/* ---- Primary button: gradient + glow ---- */
+button.primary,button.primary:focus{
+  background:linear-gradient(135deg,#7c3aed 0%,#5b21b6 100%)!important;
+  box-shadow:0 4px 18px rgba(124,58,237,.32)!important;
+  letter-spacing:.02em!important;
+}
+button.primary:hover{
+  background:linear-gradient(135deg,#6d28d9 0%,#4c1d95 100%)!important;
+  box-shadow:0 6px 28px rgba(124,58,237,.5)!important;
+  transform:translateY(-2px)!important;
+}
+button.primary:active{
+  transform:translateY(0)!important;
+  box-shadow:0 2px 10px rgba(124,58,237,.25)!important;
+}
+
+/* ---- Source toggle: segmented pill control ---- */
+.src-toggle .wrap{
+  padding:5px!important;
+  gap:4px!important;
+  border-radius:14px!important;
+}
+.src-toggle .wrap label{
+  flex:1!important;
+  display:flex!important;
+  justify-content:center!important;
+  align-items:center!important;
+  border-radius:10px!important;
+  padding:9px 16px!important;
+  cursor:pointer!important;
+  transition:background .2s,box-shadow .2s,color .15s!important;
+  color:var(--muted)!important;
+  font-weight:600!important;
+  font-size:14px!important;
+  user-select:none!important;
+}
+.src-toggle .wrap input[type=radio]{display:none!important}
+.src-toggle .wrap label:has(input[type=radio]:checked){
+  background:#fff!important;
+  box-shadow:0 1px 6px rgba(0,0,0,.1),0 0 0 1px rgba(217,119,6,.15)!important;
+  color:var(--amber)!important;
+}
+.src-toggle .wrap label:not(:has(input:checked)):hover{
+  background:rgba(255,255,255,.55)!important;
+  color:var(--text)!important;
+}
+
+/* ---- Chip hover micro-animation ---- */
+.chip{
+  transition:transform .15s,box-shadow .15s,background .15s,border-color .15s!important;
+  cursor:default!important;
+}
+.chip:hover{
+  transform:translateY(-1px)!important;
+  box-shadow:0 3px 10px rgba(0,0,0,.1)!important;
+}
+.chip-lit:hover{
+  background:rgba(217,119,6,.22)!important;
+  border-color:rgba(217,119,6,.45)!important;
+}
+
+/* ---- Input: warm hover state ---- */
+input[type=text]:hover,input[type=number]:hover,textarea:hover{
+  border-color:rgba(124,58,237,.3)!important;
+  background:#fafaf8!important;
+}
+
+/* ---- Upload zone: purple glow on hover ---- */
+.upload-button:hover,.upload-box:hover,.empty:hover{
+  box-shadow:0 4px 18px rgba(124,58,237,.14)!important;
+}
+
+/* ---- Guide step: lift + number zoom on hover ---- */
+.guide-step{transition:transform .2s,box-shadow .2s!important}
+.guide-step:hover{
+  transform:translateY(-3px)!important;
+  box-shadow:0 6px 22px rgba(0,0,0,.1)!important;
+}
+.guide-step .num{transition:transform .2s!important}
+.guide-step:hover .num{transform:scale(1.12)!important}
+
+/* ---- Accordion open: amber left accent ---- */
+.accordion.open>.label-wrap{
+  border-left:3px solid var(--amber)!important;
+  padding-left:12px!important;
+}
+
+/* ---- Hero hint: warm gradient background ---- */
+.hero-hint{
+  background:linear-gradient(135deg,rgba(217,119,6,.07),rgba(217,119,6,.02))!important;
+  border-color:rgba(217,119,6,.2)!important;
+}
+
+/* ---- Callout hover ---- */
+.callout{transition:box-shadow .15s!important}
+.callout:hover{box-shadow:0 2px 12px rgba(0,0,0,.07)!important}
+
+/* ---- Results back button: slide hint ---- */
+button.res-back{transition:background .15s,transform .12s!important}
+button.res-back:hover{transform:translateX(-2px)!important}
+
+/* ---- Font smoothing ---- */
+body{
+  -webkit-font-smoothing:antialiased!important;
+  text-rendering:optimizeLegibility!important;
+}
 """
 
 
@@ -1226,11 +1498,11 @@ INIT_JS = r"""
       const px = Math.max(0, Math.min(pw, prog * pw));
       cx.save();
       cx.clip(wavePath);                       // keep every fill inside the curve
-      cx.fillStyle = 'rgba(122,106,42,.40)';   // not-yet-played part (muted gold)
+      cx.fillStyle = 'rgba(100,78,180,.32)';   // not-yet-played part (muted purple)
       cx.fillRect(0, 0, pw, ph);
-      if (px > 0) {                            // already-played part (orange)
+      if (px > 0) {                            // already-played part (purple)
         const g = cx.createLinearGradient(0, 0, 0, ph);
-        g.addColorStop(0, '#ff8a1e'); g.addColorStop(1, '#e23b00');
+        g.addColorStop(0, '#a78bfa'); g.addColorStop(1, '#7c3aed');
         cx.fillStyle = g;
         cx.fillRect(0, 0, px, ph);
       }
@@ -1542,27 +1814,9 @@ _LOGO_SVG = (
 
 # The banner at the top of every screen.
 HERO_HTML = f"""
-<div class="hero">
-  <div class="hero-inner">
-    <div class="hero-logo">{_LOGO_SVG}</div>
-    <div>
-      <div class="hero-eyebrow">Audio Transcription Studio</div>
-      <h1 class="hero-name">Sonari</h1>
-      <p class="hero-tag">Turn any audio into text — <span class="hero-hi">speech</span> or
-      <span class="hero-hi">song lyrics</span> — then sing along with a karaoke player
-      and play the <span class="hero-hi">guitar chords</span>.
-      Runs 100% on your own computer.</p>
-      <div class="hero-chips">
-        <span class="chip">🎙️ Speech → text</span>
-        <span class="chip">🎵 Music → lyrics</span>
-        <span class="chip">🎤 Karaoke</span>
-        <span class="chip">🎸 Chords</span>
-        <span class="chip">▶️ YouTube</span>
-        <span class="chip chip-lit">🔒 100% offline</span>
-      </div>
-    </div>
-  </div>
-  <div class="hero-hint">New here? Open the <b>📖 Guide</b> tab for a one-minute walkthrough.</div>
+<div class="hero-bar">
+  <div class="hero-bar-logo">{_LOGO_SVG}</div>
+  <span class="hero-bar-name">Sonari</span>
 </div>
 """
 
@@ -1581,7 +1835,7 @@ GUIDE_HTML = """
     <div class="guide-step"><div class="num">1</div><b>Pick a tab</b>
       <span>Speech → text for talking, Music → lyrics for songs — both support file upload or a link.</span></div>
     <div class="guide-step"><div class="num">2</div><b>Add audio &amp; press the button</b>
-      <span>Upload a file, paste a link, or record from your mic — then press the big purple button.</span></div>
+      <span>Upload a file, paste a link, or record from your mic — then press the big amber button.</span></div>
     <div class="guide-step"><div class="num">3</div><b>Results appear automatically</b>
       <span>One smooth bar fills up. When it's done, your karaoke, lyrics &amp; chords appear on their own.</span></div>
   </div>
@@ -2005,10 +2259,10 @@ def build_ui() -> gr.Blocks:
 
 
 def _build_theme() -> gr.themes.Base:
-    """Warm Paper: amber-gold on warm off-white."""
+    """Soft purple on warm off-white."""
     return gr.themes.Soft(
-        primary_hue=gr.themes.colors.amber,
-        secondary_hue=gr.themes.colors.yellow,
+        primary_hue=gr.themes.colors.violet,
+        secondary_hue=gr.themes.colors.purple,
         neutral_hue=gr.themes.colors.stone,
         radius_size=gr.themes.sizes.radius_lg,
         font=["Segoe UI Variable", "system-ui", "-apple-system", "Segoe UI",
@@ -2022,26 +2276,26 @@ def _build_theme() -> gr.themes.Base:
         background_fill_secondary_dark="#f2f1ee",
         border_color_primary="rgba(0,0,0,0.08)",
         border_color_primary_dark="rgba(0,0,0,0.08)",
-        color_accent="#d97706",
-        color_accent_soft="rgba(217,119,6,0.11)",
+        color_accent="#7c3aed",
+        color_accent_soft="rgba(124,58,237,0.1)",
         input_background_fill="#f2f1ee",
         input_background_fill_dark="#f2f1ee",
         input_background_fill_focus="#ffffff",
         input_background_fill_focus_dark="#ffffff",
         input_border_color="rgba(0,0,0,0.08)",
         input_border_color_dark="rgba(0,0,0,0.08)",
-        input_border_color_focus="#d97706",
-        input_border_color_focus_dark="#d97706",
-        button_primary_background_fill="#d97706",
-        button_primary_background_fill_hover="#b45309",
-        button_primary_background_fill_dark="#d97706",
-        button_primary_background_fill_hover_dark="#b45309",
+        input_border_color_focus="#7c3aed",
+        input_border_color_focus_dark="#7c3aed",
+        button_primary_background_fill="#7c3aed",
+        button_primary_background_fill_hover="#5b21b6",
+        button_primary_background_fill_dark="#7c3aed",
+        button_primary_background_fill_hover_dark="#5b21b6",
         button_primary_text_color="#ffffff",
         button_primary_text_color_dark="#ffffff",
         button_secondary_background_fill="transparent",
-        button_secondary_background_fill_hover="rgba(217,119,6,0.1)",
-        button_secondary_border_color="rgba(217,119,6,0.3)",
-        button_secondary_text_color="#d97706",
+        button_secondary_background_fill_hover="rgba(124,58,237,0.1)",
+        button_secondary_border_color="rgba(124,58,237,0.3)",
+        button_secondary_text_color="#7c3aed",
         block_background_fill="#ffffff",
         block_background_fill_dark="#ffffff",
         block_border_color="rgba(0,0,0,0.08)",

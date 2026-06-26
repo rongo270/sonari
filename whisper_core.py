@@ -4,8 +4,8 @@ whisper_core.py
 Shared transcription engine built on faster-whisper (CTranslate2).
 
 Used by:
-  - transcribe.py  (speech -> text)
-  - lyrics.py      (music -> lyrics, after vocal separation)
+  - tools/transcribe.py  (speech -> text)
+  - lyrics.py            (music -> lyrics, after vocal separation)
 
 Design goals:
   - Highest practical accuracy (defaults to the large-v3 model).

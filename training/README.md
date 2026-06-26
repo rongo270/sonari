@@ -12,7 +12,7 @@
   weak language, or a special vocabulary (names, jargon, slang). We do this with
   **LoRA**, which trains ~1% of the model and fits on a **free** cloud GPU.
 
-So the plan is: **run inference locally** (the `transcribe.py` / `lyrics.py`
+So the plan is: **run inference locally** (the `tools/transcribe.py` / `lyrics.py`
 tools we built), and **train in the cloud** when you have a specific target.
 
 ---
@@ -81,9 +81,9 @@ hour if you want to fine-tune `large-v3` properly.
 
 ---
 
-## Using your fine-tuned model back in `transcribe.py`
+## Using your fine-tuned model back in `tools/transcribe.py`
 
-`transcribe.py` uses faster-whisper (CTranslate2), so a Hugging Face model must
+`tools/transcribe.py` uses faster-whisper (CTranslate2), so a Hugging Face model must
 be (a) merged and (b) converted. Do this once, in Colab or locally:
 
 ```python
@@ -108,7 +108,7 @@ ct2-transformers-converter --model whisper-merged \
 Copy the `whisper-large-v3-mine/` folder to your laptop, then:
 
 ```bash
-python transcribe.py input/test.wav --model "./whisper-large-v3-mine"
+python tools/transcribe.py input/test.wav --model "./whisper-large-v3-mine"
 ```
 
 `--model` accepts a local folder path, so your custom model just works.

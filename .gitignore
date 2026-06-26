@@ -7,7 +7,7 @@ venv/
 .venv/
 env/
 
-# Downloaded model weights (~1.7 GB) — re-fetched by download_models.py
+# Downloaded model weights (~1.7 GB) — re-fetched by tools/download_models.py
 models/
 
 # Demucs vocal-separation output (audio stems)
@@ -31,6 +31,10 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# Windows shortcuts hard-code this machine's path, so they're regenerated
+# locally by tools/make_shortcut.bat rather than committed.
+*.lnk
 
 # Private personal notes / roadmap (never published)
 NOTES.md

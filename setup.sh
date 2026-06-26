@@ -46,11 +46,11 @@ echo "This is the long step - it downloads a few hundred MB. Please wait."
 # --- 5) Download the AI models ---
 echo
 echo "Downloading AI models (about 1.8 GB - one time)..."
-"$VPY" download_models.py
+"$VPY" tools/download_models.py
 
 echo
 echo "============================================================"
-echo "  DONE!  Now try:"
-echo "      ./transcribe.sh input/jfk.flac --model base"
-echo "      ./lyrics.sh \"input/your-song.mp3\""
+echo "  DONE!  Launch the app with  ./app.sh , or try:"
+echo "      ./tools/transcribe.sh input/jfk.flac --model base"
+echo "      ./tools/lyrics.sh \"input/your-song.mp3\""
 echo "============================================================"
