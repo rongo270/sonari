@@ -731,192 +731,376 @@ def _scan_library() -> list:
 # --------------------------------------------------------------------------- #
 # All our custom CSS — ONE real stylesheet, handed to gr.Blocks(css=...)
 # --------------------------------------------------------------------------- #
-# IMPORTANT: this used to be injected from JavaScript, which was unreliable — when
-# it didn't run you got the dreaded "black text on a black box" karaoke. Giving
-# the CSS to Gradio directly guarantees it always loads. The karaoke colours are
-# deliberately high-contrast and self-contained (the player owns its own bright
-# yellow background) so it looks the same and stays readable in any page theme.
 CUSTOM_CSS = """
-/* ---- center the page a little ---------------------------------------- */
-.gradio-container{max-width:1040px!important;margin:0 auto!important}
+/* ============================================================
+   SONARI — Dark Studio
+   Palette: deep charcoal surfaces, amber gold as the single accent.
+   Every glow, border tint, and active state is the same #f0a500.
+   ============================================================ */
 
-/* ---- the single progress bar ----------------------------------------- */
-.pbar-card{border:1px solid rgba(130,130,170,.28);border-radius:16px;padding:22px 24px;background:rgba(130,130,170,.06)}
-.pbar-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:14px}
-.pbar-label{font-size:17px;font-weight:650}
-.pbar-pct{font-size:14px;font-weight:700;opacity:.7;font-variant-numeric:tabular-nums}
-.pbar-track{height:16px;border-radius:999px;background:rgba(130,130,170,.22);overflow:hidden;position:relative}
-.pbar-track::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(130,130,170,.16) 10px 20px);background-size:28px 28px;animation:pbar-stripe .9s linear infinite}
-@keyframes pbar-stripe{to{background-position:28px 0}}
-.pbar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#6d6df0,#9b6df0);width:0;transition:width .35s ease;position:relative;z-index:1;overflow:hidden}
-.pbar-fill::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:translateX(-100%);animation:pbar-sheen 1.15s linear infinite}
-@keyframes pbar-sheen{to{transform:translateX(100%)}}
-.pbar-sub{margin-top:13px;font-size:13px;opacity:.7;min-height:1.1em}
-/* hidden auto-reveal trigger — JS clicks it when pbar reaches 100% */
+:root{
+  --bg:#0b0d14;
+  --s0:#131620;
+  --s1:#1a1e2e;
+  --s2:#21263a;
+  --line:rgba(255,255,255,.07);
+  --line2:rgba(255,255,255,.04);
+  --amber:#f0a500;
+  --amber-d:rgba(240,165,0,.13);
+  --amber-g:rgba(240,165,0,.26);
+  --text:#eceef4;
+  --muted:#7b8196;
+  --dim:#454a5e;
+}
+
+/* ---- base page ---- */
+body,
+.gradio-container,
+footer,
+.app.svelte-182fdeq,
+.app.svelte-1kyws56{
+  background:var(--bg)!important;
+  color:var(--text)!important;
+}
+.gradio-container{max-width:1100px!important;padding:0 16px!important}
+
+/* ---- every Gradio block / panel ---- */
+.block,.form,.panel,.gap,.padded,.contain,
+.wrap.default,.wrap.focus,.wrap.show-focus{
+  background:var(--s0)!important;
+  border-color:var(--line)!important;
+}
+
+/* ---- inputs, textboxes ---- */
+input[type=text],input[type=number],input[type=search],
+input[type=email],input[type=url],textarea{
+  background:var(--s1)!important;
+  border-color:var(--line)!important;
+  color:var(--text)!important;
+  border-radius:10px!important;
+  transition:border-color .15s,box-shadow .15s!important;
+}
+input[type=text]:focus,input[type=number]:focus,textarea:focus{
+  border-color:var(--amber)!important;
+  box-shadow:0 0 0 3px var(--amber-d)!important;
+  outline:none!important;
+}
+input::placeholder,textarea::placeholder{color:var(--dim)!important}
+
+/* ---- labels ---- */
+label,.label-wrap label,.block label,
+span.svelte-1gfkn6j,.svelte-s1r2yt{
+  color:var(--muted)!important;
+}
+.info{color:var(--dim)!important;font-size:12px!important}
+
+/* ---- dropdown menus ---- */
+ul.options,ul.options li,.dropdown-arrow{
+  background:var(--s1)!important;
+  border-color:var(--line)!important;
+  color:var(--text)!important;
+}
+ul.options li:hover{background:var(--amber-d)!important;color:var(--amber)!important}
+ul.options li.selected{color:var(--amber)!important;font-weight:600!important}
+
+/* ---- primary button ---- */
+button.primary,button.primary:focus{
+  background:var(--amber)!important;
+  color:#0b0d14!important;
+  border:none!important;
+  box-shadow:0 4px 20px var(--amber-g)!important;
+  font-weight:700!important;
+  font-size:15px!important;
+  letter-spacing:.01em!important;
+  transition:transform .1s,box-shadow .2s,background .15s!important;
+  border-radius:12px!important;
+}
+button.primary:hover{
+  background:#f5b83a!important;
+  box-shadow:0 8px 32px var(--amber-g)!important;
+  transform:translateY(-1px)!important;
+}
+button.primary:active{transform:none!important;box-shadow:0 2px 10px var(--amber-d)!important}
+
+/* ---- secondary & small buttons ---- */
+button.secondary,button.sm{
+  background:transparent!important;
+  border:1px solid rgba(240,165,0,.3)!important;
+  color:var(--amber)!important;
+  border-radius:9px!important;
+  font-weight:600!important;
+  font-size:13px!important;
+  transition:background .15s,border-color .15s!important;
+}
+button.secondary:hover,button.sm:hover{
+  background:var(--amber-d)!important;
+  border-color:var(--amber)!important;
+}
+
+/* ---- tab bar ---- */
+.tab-nav{
+  border-bottom:1px solid var(--line)!important;
+  gap:0!important;
+  background:transparent!important;
+  padding:0!important;
+}
+.tab-nav button{
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  color:var(--muted)!important;
+  font-weight:600!important;
+  font-size:14px!important;
+  padding:12px 22px!important;
+  border-bottom:2px solid transparent!important;
+  margin-bottom:-1px!important;
+  transition:color .15s,border-color .15s!important;
+  letter-spacing:.01em!important;
+}
+.tab-nav button:hover{color:var(--text)!important}
+.tab-nav button.selected{
+  color:var(--amber)!important;
+  border-bottom-color:var(--amber)!important;
+  background:transparent!important;
+}
+
+/* ---- accordions ---- */
+.accordion,.accordion>.label-wrap{
+  background:var(--s0)!important;
+  border-color:var(--line)!important;
+  color:var(--muted)!important;
+}
+.accordion>.label-wrap:hover{color:var(--text)!important}
+.accordion.open{border-color:rgba(240,165,0,.18)!important}
+
+/* ---- checkboxes & radios ---- */
+input[type=checkbox],input[type=radio]{accent-color:var(--amber)!important}
+.checkbox-group,.radio-group{background:transparent!important}
+
+/* ---- range sliders ---- */
+input[type=range]{accent-color:var(--amber)!important}
+
+/* ---- file / audio upload zone ---- */
+.upload-button,.upload-box,.empty,.icon-button{
+  background:var(--s1)!important;
+  border-color:rgba(240,165,0,.2)!important;
+  color:var(--muted)!important;
+  transition:border-color .15s,background .15s!important;
+}
+.upload-button:hover,.upload-box:hover{
+  border-color:var(--amber)!important;
+  background:var(--amber-d)!important;
+}
+.waveform-container,.waveform,.audio-player{
+  background:var(--s0)!important;
+  border-color:var(--line)!important;
+}
+
+/* ---- dataframe / table ---- */
+table{background:var(--s0)!important;color:var(--text)!important}
+thead th{
+  background:var(--s1)!important;
+  color:var(--muted)!important;
+  font-size:11px!important;font-weight:600!important;
+  letter-spacing:.07em!important;text-transform:uppercase!important;
+}
+tbody td{border-color:var(--line2)!important}
+tbody tr:hover td{background:rgba(240,165,0,.04)!important}
+
+/* ---- prose / markdown ---- */
+.prose,.prose p,.prose li{color:var(--text)!important}
+.prose h1,.prose h2,.prose h3,.prose h4{color:var(--text)!important}
+.prose a{color:var(--amber)!important}
+.prose code,.prose pre{
+  background:var(--s1)!important;
+  color:var(--amber)!important;
+  border-radius:6px!important;
+}
+.prose hr{border-color:var(--line)!important}
+.prose strong{color:var(--text)!important}
+
+/* ---- gradio footer ---- */
+footer.svelte-1lyswbr,.footer{display:none!important}
+
+/* ===========================================================
+   PROGRESS BAR — slim amber bar with glow
+   =========================================================== */
+.pbar-card{
+  border:1px solid var(--line)!important;
+  border-radius:16px!important;
+  padding:26px 28px!important;
+  background:var(--s0)!important;
+  box-shadow:none!important;
+}
+.pbar-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:18px}
+.pbar-label{font-size:16px;font-weight:700;color:var(--text)}
+.pbar-pct{font-size:14px;font-weight:700;color:var(--amber);font-variant-numeric:tabular-nums}
+.pbar-track{
+  height:5px;border-radius:999px;
+  background:var(--s2);overflow:hidden;position:relative
+}
+.pbar-track::before{display:none}
+.pbar-fill{
+  height:100%;border-radius:999px;
+  background:var(--amber);
+  width:0;transition:width .4s ease;
+  position:relative;z-index:1;
+  box-shadow:0 0 10px var(--amber-g)
+}
+.pbar-fill::after{display:none}
+.pbar-sub{margin-top:14px;font-size:13px;color:var(--muted);min-height:1.1em}
 .auto-reveal-btn{display:none!important}
 
-/* ---- results header row (summary + back button) ---- */
-.res-row{display:flex;align-items:center;gap:12px;margin-bottom:16px!important}
-.res-row .prose{flex:1}
-.res-row .prose h3{margin:0!important;line-height:1.2!important}
-button.res-back{border:1px solid rgba(99,102,241,.35)!important;border-radius:10px!important;background:transparent!important;color:#6366f1!important;font-size:13px!important;font-weight:600!important;padding:7px 16px!important;transition:background .15s,color .15s!important;white-space:nowrap;flex:0 0 auto}
-button.res-back:hover{background:#6366f1!important;color:#fff!important;border-color:#6366f1!important}
+/* ===========================================================
+   RESULTS HEADER
+   =========================================================== */
+.res-row{
+  display:flex!important;align-items:center!important;
+  gap:14px!important;margin-bottom:20px!important;
+  padding-bottom:16px!important;
+  border-bottom:1px solid var(--line)!important;
+}
+.res-row .prose{flex:1!important}
+.res-row .prose h3{
+  margin:0!important;font-size:17px!important;
+  color:var(--text)!important;line-height:1.3!important;
+}
+button.res-back{
+  border:1px solid rgba(240,165,0,.3)!important;
+  border-radius:9px!important;
+  background:transparent!important;
+  color:var(--amber)!important;
+  font-size:12px!important;font-weight:600!important;
+  padding:6px 14px!important;
+  transition:background .15s!important;
+  white-space:nowrap;flex:0 0 auto
+}
+button.res-back:hover{background:var(--amber-d)!important}
 
 /* ---- source toggle radio ---- */
-.src-toggle .wrap{background:rgba(99,102,241,.06)!important;border-radius:12px!important;padding:10px 14px!important;border:1px solid rgba(99,102,241,.15)!important}
+.src-toggle .wrap{
+  background:var(--s1)!important;
+  border-radius:12px!important;
+  padding:10px 14px!important;
+  border:1px solid var(--line)!important;
+}
 
-/* ---- karaoke player (self-contained sunny YELLOW theme, high contrast) - */
-/* Light gold background + DARK text so the lyrics are easy to read.
-   WANT A GREEN SCREEN INSTEAD? Swap the two `background:` gradients below for
-   green ones, e.g.
-     .kara-root           -> radial-gradient(120% 140% at 50% 0%,#eaffd1 0%,#b6f06a 55%,#8fe03d 100%)
-     .kara-root:fullscreen-> radial-gradient(120% 120% at 50% 30%,#dcffb0,#8fe03d)
-   The dark text already reads fine on green too, so nothing else needs to change. */
-.kara-root{--kara-up:#241a00;--kara-sung:#9b8b48;border:1px solid #e6c34a;border-radius:18px;padding:18px 18px 20px;background:radial-gradient(120% 140% at 50% 0%,#fff7c4 0%,#ffe874 55%,#ffd23f 100%);color:var(--kara-up);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 16px 44px rgba(150,115,15,.35)}
+/* ===========================================================
+   KARAOKE PLAYER — rich gold spotlight on dark page
+   =========================================================== */
+.kara-root{--kara-up:#1a1300;--kara-sung:#8c7840;border:1px solid #c89600;border-radius:18px;padding:18px 18px 20px;background:radial-gradient(110% 130% at 50% -10%,#fffcd6 0%,#ffd700 52%,#c89200 100%);color:var(--kara-up);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;box-shadow:0 0 0 4px rgba(200,150,0,.12),0 24px 64px rgba(0,0,0,.55)}
 .kara-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
-.kara-title{font-size:13px;color:#7a6a2a;font-weight:600}
-.kara-fs{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#8a5a00;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
-.kara-fs:hover{background:#a86d00}
-/* the <audio> is now just the hidden engine; the waveform player drives it */
+.kara-title{font-size:12px;color:#5a4800;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.kara-fs{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#6a4400;color:#fff;font-size:12px;font-weight:700;letter-spacing:.03em;transition:background .15s}
+.kara-fs:hover{background:#8a5a00}
 .kara-audio{display:none}
-/* custom player row: play button · clickable waveform · time-on-the-side */
 .kara-player{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-.kara-play{flex:0 0 auto;width:46px;height:46px;border:0;border-radius:50%;background:#8a5a00;color:#fff;font-size:17px;cursor:pointer;transition:background .15s,transform .08s;box-shadow:0 3px 10px rgba(150,100,0,.3)}
-.kara-play:hover{background:#a86d00}
+.kara-play{flex:0 0 auto;width:48px;height:48px;border:0;border-radius:50%;background:#6a4400;color:#ffe;font-size:18px;cursor:pointer;transition:background .15s,transform .08s,box-shadow .15s;box-shadow:0 4px 14px rgba(100,68,0,.4)}
+.kara-play:hover{background:#8a5a00;box-shadow:0 6px 20px rgba(100,68,0,.5)}
 .kara-play:active{transform:scale(.93)}
 .kara-wave{flex:1 1 auto;min-width:0;height:54px;cursor:pointer;display:block}
-.kara-time{flex:0 0 auto;min-width:88px;text-align:right;font-size:13px;font-weight:700;color:#7a6a2a;font-variant-numeric:tabular-nums}
-/* the scrolling lyrics; soft fade at top & bottom so it glides */
-.kara-lyrics{max-height:430px;overflow:auto;scroll-behavior:smooth;padding:10px 6px;-webkit-mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent);mask-image:linear-gradient(180deg,transparent,#000 9%,#000 91%,transparent)}
-/* a line has three states: UPCOMING (default, clearly readable) ·
-   NOW SINGING (.on, big + bright + highlighted) · ALREADY SUNG (.sung, dim) */
-.kara-line{padding:7px 14px;margin:3px 0;border-radius:12px;font-size:20px;line-height:1.5;font-weight:600;color:var(--kara-up)!important;opacity:.9;cursor:pointer;transition:color .2s,background .2s,transform .2s,opacity .2s}
-.kara-line:hover{background:rgba(120,80,0,.12);opacity:1}
-.kara-line.sung{color:var(--kara-sung)!important;opacity:.6}
-.kara-line.on{color:#1a1300!important;font-size:23px;font-weight:750;opacity:1;background:linear-gradient(90deg,rgba(255,255,255,.6),rgba(255,255,255,.1));box-shadow:inset 3px 0 0 #c47d00,0 2px 10px rgba(150,100,0,.2);transform:scale(1.012)}
-/* a single word: upcoming-in-current-line stays darkest so you can read
-   ahead; the word being sung gets a hot orange highlight; sung words dim */
-.kara-w{border-radius:7px;padding:0 2px;transition:color .12s,background .12s}
-.kara-line.on .kara-w:not(.on):not(.sung){color:#1a1300!important}
-.kara-w.sung{color:#a89860!important}
-.kara-w.on{background:linear-gradient(180deg,#ff8a1e,#e23b00);color:#fff!important;font-weight:800;padding:2px 5px;box-shadow:0 2px 8px rgba(200,60,0,.45)}
-.kara-empty{padding:18px;border:1px dashed rgba(150,110,20,.5);border-radius:14px;opacity:.9;font-size:14px;color:#3a2f00}
-/* fullscreen = a real karaoke screen */
-.kara-root:fullscreen{padding:6vh 8vw;display:flex;flex-direction:column;justify-content:center;background:radial-gradient(120% 120% at 50% 30%,#fff2a8,#ffce3a)}
+.kara-time{flex:0 0 auto;min-width:88px;text-align:right;font-size:13px;font-weight:700;color:#5a4800;font-variant-numeric:tabular-nums}
+.kara-lyrics{max-height:440px;overflow:auto;scroll-behavior:smooth;padding:10px 6px;-webkit-mask-image:linear-gradient(180deg,transparent,#000 8%,#000 92%,transparent);mask-image:linear-gradient(180deg,transparent,#000 8%,#000 92%,transparent)}
+.kara-line{padding:8px 14px;margin:3px 0;border-radius:12px;font-size:20px;line-height:1.5;font-weight:600;color:var(--kara-up)!important;opacity:.9;cursor:pointer;transition:color .2s,background .2s,transform .18s,opacity .2s}
+.kara-line:hover{background:rgba(100,68,0,.1);opacity:1}
+.kara-line.sung{color:var(--kara-sung)!important;opacity:.55}
+.kara-line.on{color:#0d0a00!important;font-size:24px;font-weight:800;opacity:1;background:linear-gradient(90deg,rgba(255,255,255,.55),rgba(255,255,255,.08));box-shadow:inset 3px 0 0 #b87400,0 3px 14px rgba(120,80,0,.2);transform:scale(1.014)}
+.kara-w{border-radius:6px;padding:0 2px;transition:color .1s,background .1s}
+.kara-line.on .kara-w:not(.on):not(.sung){color:#0d0a00!important}
+.kara-w.sung{color:#9a8440!important}
+.kara-w.on{background:linear-gradient(180deg,#ff8a00,#d43a00);color:#fff!important;font-weight:800;padding:2px 5px;box-shadow:0 2px 10px rgba(200,50,0,.5)}
+.kara-empty{padding:18px;border:1px dashed rgba(140,100,10,.4);border-radius:14px;opacity:.8;font-size:14px;color:#3a2e00}
+.kara-root:fullscreen{padding:6vh 8vw;display:flex;flex-direction:column;justify-content:center;background:radial-gradient(100% 110% at 50% 25%,#fff8c0,#ffd700)}
 .kara-root:fullscreen .kara-lyrics{max-height:none;flex:1;text-align:center}
-.kara-root:fullscreen .kara-line{font-size:30px}
-.kara-root:fullscreen .kara-line.on{font-size:42px}
+.kara-root:fullscreen .kara-line{font-size:32px}
+.kara-root:fullscreen .kara-line.on{font-size:44px}
 .kara-root:fullscreen .kara-wave{height:80px}
-
-/* the right-hand buttons in the karaoke title bar (vocals toggle + fullscreen) */
 .kara-bar-btns{display:flex;gap:8px;align-items:center;flex:0 0 auto}
-.kara-toggle{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#5a3a00;color:#fff;font-size:13px;font-weight:600;transition:background .15s}
-.kara-toggle:hover{background:#7a5210}
+.kara-toggle{cursor:pointer;border:0;border-radius:10px;padding:8px 14px;background:#4a2e00;color:#ffd;font-size:12px;font-weight:700;letter-spacing:.03em;transition:background .15s}
+.kara-toggle:hover{background:#6a4400}
 
-/* ---- guitar chord sheet (lyrics with chords above the words) ------------- */
-.cs-root{border:1px solid rgba(130,130,170,.28);border-radius:16px;padding:16px 18px;background:rgba(130,130,170,.05)}
-.cs-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(130,130,170,.2)}
-.cs-key{font-size:15px;font-weight:700}
-.cs-tag{font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(130,130,170,.16)}
-.cs-capo{background:rgba(179,0,90,.12);color:#b3005a}
-/* big line spacing leaves room for a chord sitting above each word */
+/* ===========================================================
+   GUITAR CHORD SHEET
+   =========================================================== */
+.cs-root{border:1px solid var(--line);border-radius:16px;padding:16px 18px;background:var(--s0)}
+.cs-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.cs-key{font-size:14px;font-weight:700;color:var(--text)}
+.cs-tag{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--s1);color:var(--muted);border:1px solid var(--line)}
+.cs-capo{background:var(--amber-d);color:var(--amber);border-color:rgba(240,165,0,.3)}
 .cs-body{font-size:17px;line-height:2.6}
-.cs-line{margin:2px 0}
-.cs-instr{opacity:.85;margin:9px 0}
-.cs-section{font-style:italic;opacity:.7;font-size:13px;margin-right:4px}
-/* each word + its (optional) chord is one bottom-aligned stack, so the lyrics
-   line up no matter which words carry a chord */
+.cs-line{margin:2px 0;color:var(--text)}
+.cs-instr{opacity:.7;margin:9px 0}
+.cs-section{font-style:italic;opacity:.5;font-size:13px;margin-right:4px}
 .cs-unit{display:inline-block;vertical-align:bottom}
-.cs-chord{display:block;height:1.25em;line-height:1.25;font-weight:800;color:#b3005a;font-size:.8em;white-space:pre}
-.cs-word{white-space:pre}
+.cs-chord{display:block;height:1.25em;line-height:1.25;font-weight:800;color:var(--amber);font-size:.8em;white-space:pre}
+.cs-word{white-space:pre;color:var(--text)}
 .cs-chord.cs-inline{display:inline-block;height:auto;margin-right:6px;font-size:.95em}
-.cs-empty{padding:16px;border:1px dashed rgba(130,130,170,.5);border-radius:14px;opacity:.85;font-size:14px}
+.cs-empty{padding:16px;border:1px dashed rgba(240,165,0,.18);border-radius:14px;opacity:.7;font-size:14px;color:var(--muted)}
 
-/* ===================================================================== */
-/*  Sonari look & feel — hero header · tabs · buttons · the Guide "book"  */
-/*  (added on top of the originals above; later rules win, so a couple of */
-/*   earlier cards get a crisper treatment to suit the new background.)   */
-/* ===================================================================== */
-:root{
-  --son-indigo:#6366f1; --son-violet:#8b5cf6; --son-purple:#a855f7;
-  --son-ink:#21243d; --son-muted:#6b6f8d; --son-line:rgba(99,102,241,.16);
-  --son-accent:#ec4899; --son-grad:linear-gradient(120deg,#6366f1,#8b5cf6 54%,#a855f7);
+/* ===========================================================
+   HERO HEADER
+   =========================================================== */
+.hero{position:relative;overflow:hidden;border:1px solid rgba(240,165,0,.18);border-radius:20px;padding:28px 32px;margin:4px 0 20px;background:linear-gradient(135deg,var(--s0) 0%,var(--s1) 100%);box-shadow:0 0 0 1px rgba(240,165,0,.06),0 24px 64px rgba(0,0,0,.45)}
+.hero::before{content:'';position:absolute;top:-80px;right:-60px;width:320px;height:240px;background:radial-gradient(circle,rgba(240,165,0,.14),transparent 68%);pointer-events:none}
+.hero-inner{display:flex;align-items:flex-start;gap:22px;position:relative}
+.hero-logo{flex:0 0 auto;width:64px;height:64px;border-radius:16px;background:var(--amber);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(240,165,0,.35)}
+.hero-logo .logo-wave{width:42px;height:42px;fill:#0b0d14!important}
+.hero-eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:5px}
+.hero-name{margin:0 0 8px;font-size:40px;font-weight:800;letter-spacing:-.8px;color:var(--text);line-height:1}
+.hero-tag{margin:0;font-size:14.5px;line-height:1.65;color:var(--muted);max-width:56ch}
+.hero-hi{color:var(--amber);font-weight:600}
+.hero-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+.chip{font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--muted)}
+.chip-lit{background:var(--amber-d);border-color:rgba(240,165,0,.3);color:var(--amber)}
+.hero-hint{margin-top:16px;padding:8px 14px;font-size:13px;color:var(--muted);background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:10px;display:inline-block}
+.hero-hint b{color:var(--text);font-weight:600}
+@media(max-width:640px){
+  .hero-inner{flex-direction:column}
+  .hero-name{font-size:30px}
 }
-.gradio-container{max-width:1080px!important}
 
-/* ---- hero header ----------------------------------------------------- */
-.hero{position:relative;overflow:hidden;border-radius:24px;padding:30px 34px;margin:4px 0 20px;background:linear-gradient(120deg,#6366f1 0%,#8b5cf6 52%,#a855f7 100%);color:#fff;box-shadow:0 20px 54px rgba(99,72,200,.34)}
-.hero-glow{position:absolute;inset:0;background:radial-gradient(58% 120% at 86% -12%,rgba(255,255,255,.4),transparent 60%);pointer-events:none}
-.hero-main{display:flex;align-items:center;gap:22px;position:relative}
-.hero-logo{flex:0 0 auto;width:80px;height:80px;border-radius:22px;background:linear-gradient(135deg,#7c83ff,#a855f7);display:flex;align-items:center;justify-content:center;box-shadow:0 12px 26px rgba(60,40,120,.42),inset 0 1px 0 rgba(255,255,255,.45)}
-.hero-logo .logo-wave{width:52px;height:52px;filter:drop-shadow(0 2px 3px rgba(40,20,90,.35))}
-.hero-text h1{margin:0;font-size:42px;line-height:1.02;font-weight:830;letter-spacing:-.6px}
-.hero-tag{margin:8px 0 0;font-size:15.5px;line-height:1.5;max-width:64ch;color:rgba(255,255,255,.95)}
-.hero-tag b{font-weight:730}
-.hero-pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
-.hero-pills .pill{font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28)}
-.hero-pills .pill-accent{background:#fff;color:#7c3aed;border-color:#fff}
-.hero-hint{position:relative;margin-top:18px;font-size:13.5px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.24);padding:9px 15px;border-radius:12px;display:inline-block}
-.hero-hint b{font-weight:730}
-@media(max-width:640px){.hero-main{flex-direction:column;text-align:center}.hero-pills{justify-content:center}.hero-text h1{font-size:34px}}
-
-/* ---- tab bar + buttons ---------------------------------------------- */
-.tab-nav{gap:4px!important}
-.tab-nav button{font-weight:650!important;font-size:15px!important;border-radius:12px 12px 0 0!important;transition:background .15s,color .15s}
-.tab-nav button:hover{background:rgba(99,102,241,.08)!important}
-.tab-nav button.selected{color:#6d28d9!important;background:rgba(99,102,241,.10)!important}
-button.primary{transition:transform .08s ease,box-shadow .2s ease!important}
-button.primary:hover{box-shadow:0 10px 26px rgba(110,90,230,.34)!important}
-button.primary:active{transform:translateY(1px)}
-
-/* ---- progress card: a crisp white card on the new background -------- */
-.pbar-card{background:#fff!important;border:1px solid var(--son-line)!important;box-shadow:0 10px 34px rgba(90,80,170,.10)!important}
-
-/* ---- the Guide ("instruction book") -------------------------------- */
-.guide{color:var(--son-ink);font-size:15px;line-height:1.62}
-.guide h2.guide-h{font-size:21px;font-weight:790;margin:28px 0 13px;display:flex;align-items:center;gap:10px}
-.guide h2.guide-h .gh-bar{width:5px;height:22px;border-radius:3px;background:var(--son-grad)}
-.guide-lead{font-size:16.5px;color:#4a4e6e;margin:2px 0 4px}
-.guide-card{background:#fff;border:1px solid var(--son-line);border-radius:16px;padding:18px 20px;box-shadow:0 6px 22px rgba(90,80,170,.07)}
-.guide-card+.guide-card{margin-top:14px}
-.guide-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+/* ===========================================================
+   GUIDE
+   =========================================================== */
+.guide{color:var(--text);font-size:15px;line-height:1.62}
+.guide h2.guide-h{font-size:20px;font-weight:800;margin:28px 0 13px;display:flex;align-items:center;gap:10px;color:var(--text)}
+.guide h2.guide-h .gh-bar{width:4px;height:20px;border-radius:3px;background:var(--amber)}
+.guide-lead{font-size:16px;color:var(--muted);margin:2px 0 4px}
+.guide-card{background:var(--s0);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.guide-card+.guide-card{margin-top:12px}
+.guide-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:760px){.guide-grid{grid-template-columns:1fr}}
-.guide-card h3{margin:0 0 6px;font-size:17px;font-weight:740;display:flex;align-items:center;gap:8px}
-.guide-card h3 .tag{font-size:11.5px;font-weight:650;color:#7c3aed;background:rgba(124,58,237,.10);padding:3px 10px;border-radius:999px;margin-left:auto}
-.guide-card p{margin:6px 0;color:#3c3f5a}
-.guide-card .muted{color:var(--son-muted);font-size:13.5px}
-.guide-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.guide-card h3{margin:0 0 6px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;color:var(--text)}
+.guide-card h3 .tag{font-size:11px;font-weight:600;color:var(--amber);background:var(--amber-d);padding:3px 9px;border-radius:999px;margin-left:auto;border:1px solid rgba(240,165,0,.25)}
+.guide-card p{margin:6px 0;color:var(--muted)}
+.guide-card .muted{color:var(--dim);font-size:13.5px}
+.guide-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 @media(max-width:760px){.guide-steps{grid-template-columns:1fr}}
-.guide-step{background:#fff;border:1px solid var(--son-line);border-radius:16px;padding:18px}
-.guide-step .num{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--son-grad);color:#fff;font-weight:800;font-size:16px;box-shadow:0 6px 14px rgba(110,80,230,.3);margin-bottom:9px}
-.guide-step b{display:block;font-size:15.5px;margin-bottom:3px}
-.guide-step span{color:var(--son-muted);font-size:14px}
+.guide-step{background:var(--s0);border:1px solid var(--line);border-radius:14px;padding:18px}
+.guide-step .num{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:var(--amber);color:#0b0d14;font-weight:800;font-size:15px;box-shadow:0 4px 12px var(--amber-g);margin-bottom:9px}
+.guide-step b{display:block;font-size:15px;margin-bottom:3px;color:var(--text)}
+.guide-step span{color:var(--muted);font-size:14px}
 .guide ol.how{margin:8px 0 2px;padding-left:0;list-style:none;counter-reset:h}
-.guide ol.how li{position:relative;padding:4px 0 4px 31px;counter-increment:h;color:#3c3f5a}
-.guide ol.how li::before{content:counter(h);position:absolute;left:0;top:3px;width:21px;height:21px;border-radius:50%;background:rgba(99,102,241,.14);color:#5b21b6;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
-.callout{display:flex;gap:11px;align-items:flex-start;border-radius:13px;padding:12px 15px;margin:10px 0;font-size:14.2px;border:1px solid transparent}
+.guide ol.how li{position:relative;padding:4px 0 4px 31px;counter-increment:h;color:var(--muted)}
+.guide ol.how li::before{content:counter(h);position:absolute;left:0;top:3px;width:21px;height:21px;border-radius:50%;background:var(--amber-d);color:var(--amber);font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.callout{display:flex;gap:11px;align-items:flex-start;border-radius:12px;padding:12px 15px;margin:10px 0;font-size:14px;border:1px solid transparent}
 .callout .ic{font-size:18px;line-height:1.35;flex:0 0 auto}
-.callout.tip{background:rgba(16,185,129,.10);border-color:rgba(16,185,129,.30);color:#0f5132}
-.callout.note{background:rgba(99,102,241,.09);border-color:rgba(99,102,241,.26);color:#3730a3}
-.callout.warn{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.34);color:#7c4a03}
-.guide-table{width:100%;border-collapse:separate;border-spacing:0;font-size:14px;border-radius:13px;border:1px solid var(--son-line);overflow:hidden}
+.callout.tip{background:rgba(16,185,129,.09);border-color:rgba(16,185,129,.25);color:#6ee7b7}
+.callout.note{background:var(--amber-d);border-color:rgba(240,165,0,.25);color:var(--amber)}
+.callout.warn{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.28);color:#fcd34d}
+.guide-table{width:100%;border-collapse:separate;border-spacing:0;font-size:14px;border-radius:12px;border:1px solid var(--line);overflow:hidden}
 .guide-table th,.guide-table td{padding:10px 13px;text-align:left}
-.guide-table thead th{background:rgba(99,102,241,.10);font-weight:730;color:#3730a3}
-.guide-table tbody tr+tr td{border-top:1px solid var(--son-line)}
-.guide-table .rec{color:#7c3aed;font-weight:760}
-.guide kbd{background:#eef0fb;border:1px solid var(--son-line);border-bottom-width:2px;border-radius:6px;padding:1px 7px;font-size:12.5px;font-weight:600;color:#3730a3}
+.guide-table thead th{background:var(--s1);font-weight:700;color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.guide-table tbody tr+tr td{border-top:1px solid var(--line2)}
+.guide-table .rec{color:var(--amber);font-weight:700}
+.guide kbd{background:var(--s1);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:1px 7px;font-size:12px;font-weight:600;color:var(--text)}
 .guide-pillrow{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 4px}
-.guide-pill{font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:999px;background:rgba(99,102,241,.10);color:#4338ca;border:1px solid var(--son-line)}
-.guide-foot{margin:24px 0 6px;text-align:center;color:var(--son-muted);font-size:13.5px}
+.guide-pill{font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;background:var(--amber-d);color:var(--amber);border:1px solid rgba(240,165,0,.25)}
+.guide-foot{margin:24px 0 6px;text-align:center;color:var(--dim);font-size:13px}
 """
 
 
-# --------------------------------------------------------------------------- #
-# Karaoke behaviour (the moving highlight + click-to-jump + fullscreen).
-# The CSS lives in CUSTOM_CSS above; this only WIRES players up, because
-# Gradio's HTML component won't run <script>. We attach behaviour on page load
-# and a MutationObserver catches any players that appear later.
-# --------------------------------------------------------------------------- #
+
 INIT_JS = r"""
 () => {
   if (window.__sonariInit) return;
@@ -1386,27 +1570,30 @@ _LOGO_SVG = (
 # The banner at the top of every screen.
 HERO_HTML = f"""
 <div class="hero">
-  <div class="hero-glow"></div>
-  <div class="hero-main">
+  <div class="hero-inner">
     <div class="hero-logo">{_LOGO_SVG}</div>
-    <div class="hero-text">
-      <h1>Sonari</h1>
-      <p class="hero-tag">Turn any audio into text — <b>speech</b> or <b>song lyrics</b> —
-      then sing along with a <b>karaoke player</b> and play the <b>guitar chords</b>.
-      Everything runs 100% on your own computer.</p>
-      <div class="hero-pills">
-        <span class="pill">🎙️ Speech → text</span>
-        <span class="pill">🎵 Song → lyrics</span>
-        <span class="pill">🎤 Karaoke</span>
-        <span class="pill">🎸 Chords</span>
-        <span class="pill">▶️ YouTube</span>
-        <span class="pill pill-accent">💻 100% offline</span>
+    <div>
+      <div class="hero-eyebrow">Audio Transcription Studio</div>
+      <h1 class="hero-name">Sonari</h1>
+      <p class="hero-tag">Turn any audio into text — <span class="hero-hi">speech</span> or
+      <span class="hero-hi">song lyrics</span> — then sing along with a karaoke player
+      and play the <span class="hero-hi">guitar chords</span>.
+      Runs 100% on your own computer.</p>
+      <div class="hero-chips">
+        <span class="chip">🎙️ Speech → text</span>
+        <span class="chip">🎵 Music → lyrics</span>
+        <span class="chip">🎤 Karaoke</span>
+        <span class="chip">🎸 Chords</span>
+        <span class="chip">▶️ YouTube</span>
+        <span class="chip chip-lit">🔒 100% offline</span>
       </div>
     </div>
   </div>
-  <div class="hero-hint">✨ New here? Open the <b>📖 Guide</b> tab for a one-minute walkthrough.</div>
+  <div class="hero-hint">New here? Open the <b>📖 Guide</b> tab for a one-minute walkthrough.</div>
 </div>
 """
+
+
 
 # The in-app instruction book (rendered in the "📖 Guide" tab). Pure HTML styled
 # by the .guide-* rules in CUSTOM_CSS — no external assets, fully offline.
@@ -1844,26 +2031,58 @@ def build_ui() -> gr.Blocks:
     return demo
 
 
-def _build_theme() -> gr.themes.Soft:
-    """A cohesive indigo→violet theme.
-
-    Uses a SYSTEM font stack (no Google Fonts) on purpose, so the look needs no
-    network call and the app stays fully offline & private. Only a few rock-solid
-    theme variables are set here; the rest of the polish lives in CUSTOM_CSS.
-    """
-    return gr.themes.Soft(
-        primary_hue=gr.themes.colors.indigo,
-        secondary_hue=gr.themes.colors.purple,
+def _build_theme() -> gr.themes.Base:
+    """Dark Studio: amber gold on deep charcoal."""
+    return gr.themes.Base(
+        primary_hue=gr.themes.colors.amber,
+        secondary_hue=gr.themes.colors.yellow,
         neutral_hue=gr.themes.colors.slate,
-        radius_size=gr.themes.sizes.radius_lg,
+        radius_size=gr.themes.sizes.radius_md,
         font=["Segoe UI Variable", "system-ui", "-apple-system", "Segoe UI",
               "Roboto", "Helvetica", "Arial", "sans-serif"],
     ).set(
-        button_primary_background_fill="linear-gradient(90deg,#6366f1,#8b5cf6)",
-        button_primary_background_fill_hover="linear-gradient(90deg,#4f46e5,#7c3aed)",
-        button_primary_text_color="white",
-        body_background_fill="linear-gradient(180deg,#f6f7fc 0%,#eef0fb 100%)",
-        body_background_fill_dark="linear-gradient(180deg,#0e0f1c 0%,#141330 100%)",
+        body_background_fill="#0b0d14",
+        body_background_fill_dark="#0b0d14",
+        background_fill_primary="#131620",
+        background_fill_primary_dark="#131620",
+        background_fill_secondary="#1a1e2e",
+        background_fill_secondary_dark="#1a1e2e",
+        border_color_primary="rgba(255,255,255,0.07)",
+        border_color_primary_dark="rgba(255,255,255,0.07)",
+        color_accent="#f0a500",
+        color_accent_soft="rgba(240,165,0,0.13)",
+        input_background_fill="#1a1e2e",
+        input_background_fill_dark="#1a1e2e",
+        input_background_fill_focus="#21263a",
+        input_background_fill_focus_dark="#21263a",
+        input_border_color="rgba(255,255,255,0.08)",
+        input_border_color_dark="rgba(255,255,255,0.08)",
+        input_border_color_focus="#f0a500",
+        input_border_color_focus_dark="#f0a500",
+        button_primary_background_fill="#f0a500",
+        button_primary_background_fill_hover="#f5b83a",
+        button_primary_background_fill_dark="#f0a500",
+        button_primary_background_fill_hover_dark="#f5b83a",
+        button_primary_text_color="#0b0d14",
+        button_primary_text_color_dark="#0b0d14",
+        button_secondary_background_fill="transparent",
+        button_secondary_background_fill_hover="rgba(240,165,0,0.13)",
+        button_secondary_border_color="rgba(240,165,0,0.32)",
+        button_secondary_text_color="#f0a500",
+        block_background_fill="#131620",
+        block_background_fill_dark="#131620",
+        block_border_color="rgba(255,255,255,0.07)",
+        block_border_color_dark="rgba(255,255,255,0.07)",
+        block_title_text_color="#eceef4",
+        block_title_text_color_dark="#eceef4",
+        block_label_text_color="#7b8196",
+        block_label_text_color_dark="#7b8196",
+        shadow_drop="0 4px 24px rgba(0,0,0,0.45)",
+        shadow_drop_lg="0 8px 40px rgba(0,0,0,0.55)",
+        body_text_color="#eceef4",
+        body_text_color_dark="#eceef4",
+        body_text_color_subdued="#7b8196",
+        body_text_color_subdued_dark="#7b8196",
     )
 
 
